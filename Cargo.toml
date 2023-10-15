@@ -1,0 +1,27 @@
+[package]
+name = "efiloader"
+version = "0.0.1"
+edition = "2021"
+license = "GPL-2.0"
+description = "A library implementing a EFI runtime that can boot Linux kernels and related executables"
+authors = [
+  "Ard Biesheuvel <ardb@kernel.org>",
+]
+repository = "https://github.com/ardbiesheuvel/efiloader"
+categories = ["embedded", "no-std"]
+
+[dependencies]
+const-utf16 = "0.2.1"
+crc = "3.0.1"
+linked_list_allocator = "0.10.5"
+log = "0.4.14"
+once_cell = { version = "1.18.0", default-features = false }
+widestring = { version = "1.0.2", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+libc = "0.2.150"
+rand = "0.8.5"
+
+[features]
+default = ["strict_nx"]
+strict_nx = []
