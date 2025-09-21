@@ -11,19 +11,9 @@ use core::marker::PhantomPinned;
 use core::pin::Pin;
 use core::ptr;
 
-const EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID: Guid = guid!(
-    0x387477c1,
-    0x69c7,
-    0x11d2,
-    [0x8e, 0x39, 0x0, 0xa0, 0xc9, 0x69, 0x72, 0x3b]
-);
+const EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID: Guid = guid!("387477c1-69c7-11d2-8e39-00a0c969723b");
 
-const EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID: Guid = guid!(
-    0x387477c2,
-    0x69c7,
-    0x11d2,
-    [0x8e, 0x39, 0x0, 0xa0, 0xc9, 0x69, 0x72, 0x3b]
-);
+const EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID: Guid = guid!("387477c2-69c7-11d2-8e39-00a0c969723b");
 
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]

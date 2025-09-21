@@ -5,12 +5,7 @@
 use crate::*;
 use crate::{status::*, Guid};
 
-pub const EFI_MEMORY_ATTRIBUTE_PROTOCOL_GUID: Guid = guid!(
-    0xf4560cf6,
-    0x40ec,
-    0x4b4a,
-    [0xa1, 0x92, 0xbf, 0x1d, 0x57, 0xd0, 0xb1, 0x89]
-);
+pub const EFI_MEMORY_ATTRIBUTE_PROTOCOL_GUID: Guid = guid!("f4560cf6-40ec-4b4a-a192-bf1d57d0b189");
 
 #[repr(C)]
 pub struct EfiMemoryAttribute {
