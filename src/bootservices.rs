@@ -570,10 +570,7 @@ extern "efiapi" fn register_protocol_notify(
     Status::EFI_OUT_OF_RESOURCES
 }
 
-fn get_handle_vec(
-    search_type: &LocateSearchType,
-    protocol: *const Guid,
-) -> Vec<Handle> {
+fn get_handle_vec(search_type: &LocateSearchType, protocol: *const Guid) -> Vec<Handle> {
     let protocol = if !protocol.is_null() {
         Some(unsafe { &*protocol })
     } else {

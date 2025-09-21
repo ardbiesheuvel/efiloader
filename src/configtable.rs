@@ -4,8 +4,8 @@
 
 use crate::ConfigurationTablePointer::*;
 use crate::EfiContext;
-use crate::Guid;
 use crate::EfiMemoryType::EfiRuntimeServicesData;
+use crate::Guid;
 use crate::PoolBox;
 use crate::EFI;
 use alloc::collections::BTreeMap;
