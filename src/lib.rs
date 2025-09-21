@@ -121,26 +121,7 @@ const TPL_NOTIFY: Tpl = 16;
 #[allow(dead_code)]
 const TPL_HIGH_LEVEL: Tpl = 31;
 
-#[derive(PartialEq, PartialOrd, Eq, Ord, Clone, Copy, Debug)]
-#[repr(C)]
-pub struct Guid {
-    pub data1: u32,
-    pub data2: u16,
-    pub data3: u16,
-    pub data4: [u8; 8],
-}
-
-#[macro_export]
-macro_rules! guid {
-    ($a:literal, $b:literal, $c: literal, $d:expr) => {
-        Guid {
-            data1: $a,
-            data2: $b,
-            data3: $c,
-            data4: $d,
-        }
-    };
-}
+pub use uefi_raw::{guid, Guid};
 
 /// An implementation of this trait may be provided to the EFI runtime at initialization
 /// time, allowing it to print diagnostic messages, and check for key presses.
@@ -224,12 +205,7 @@ pub trait Random {
     fn get_entropy(&self, bytes: &mut [u8], use_raw: bool) -> bool;
 }
 
-const EFI_RT_PROPERTIES_TABLE_GUID: Guid = guid!(
-    0xeb66918a,
-    0x7eef,
-    0x402a,
-    [0x84, 0x2e, 0x93, 0x1d, 0x21, 0xc3, 0x8a, 0xe9]
-);
+const EFI_RT_PROPERTIES_TABLE_GUID: Guid = guid!("eb66918a-7eef-402a-842e-931d21c38ae9");
 
 const EFI_RT_SUPPORTED_GET_TIME: u32 = 0x0001;
 const EFI_RT_SUPPORTED_SET_TIME: u32 = 0x0002;

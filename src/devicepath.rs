@@ -4,12 +4,7 @@
 
 use crate::{guid, Guid};
 
-pub const EFI_DEVICE_PATH_PROTOCOL_GUID: Guid = guid!(
-    0x9576e91,
-    0x6d3f,
-    0x11d2,
-    [0x8e, 0x39, 0x0, 0xa0, 0xc9, 0x69, 0x72, 0x3b]
-);
+pub const EFI_DEVICE_PATH_PROTOCOL_GUID: Guid = guid!("09576e91-6d3f-11d2-8e39-00a0c969723b");
 
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, PartialEq, Debug)]

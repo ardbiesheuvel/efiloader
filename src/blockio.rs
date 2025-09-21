@@ -13,12 +13,7 @@ use core::ffi::c_void;
 
 const EFI_BLOCK_IO_PROTOCOL_REVISION: u64 = 0x00010000;
 
-const EFI_BLOCK_IO_PROTOCOL_GUID: Guid = guid!(
-    0x964e5b21,
-    0x6459,
-    0x11d2,
-    [0x8e, 0x39, 0x0, 0xa0, 0xc9, 0x69, 0x72, 0x3b]
-);
+const EFI_BLOCK_IO_PROTOCOL_GUID: Guid = guid!("964e5b21-6459-11d2-8e39-00a0c969723b");
 
 /// EFI_BLOCK_IO_MEDIA - refer to the UEFI specification for the meaning of individual fields.
 #[repr(C)]

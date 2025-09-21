@@ -43,12 +43,7 @@ pub fn size_to_pages(size: usize) -> usize {
 
 const EFI_MEMORY_ATTRIBUTES_FLAGS_RT_FORWARD_CONTROL_FLOW_GUARD: u32 = 0x1;
 
-const EFI_MEMORY_ATTRIBUTES_TABLE_GUID: Guid = guid!(
-    0xdcfa911d,
-    0x26eb,
-    0x469f,
-    [0xa2, 0x20, 0x38, 0xb7, 0xdc, 0x46, 0x12, 0x20]
-);
+const EFI_MEMORY_ATTRIBUTES_TABLE_GUID: Guid = guid!("dcfa911d-26eb-469f-a220-38b7dc461220");
 
 #[derive(Debug)]
 #[repr(C)]

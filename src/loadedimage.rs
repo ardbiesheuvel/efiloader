@@ -12,21 +12,12 @@ use crate::{memorytype::*, status::*, systemtable::*, Guid, Handle};
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::ffi::c_void;
 use core::ptr;
 
-pub const EFI_LOADED_IMAGE_PROTOCOL_GUID: Guid = guid!(
-    0x5B1B31A1,
-    0x9562,
-    0x11d2,
-    [0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B]
-);
+pub const EFI_LOADED_IMAGE_PROTOCOL_GUID: Guid = guid!("5b1b31a1-9562-11d2-8e3f-00a0c969723b");
 
-pub const LINUX_EFI_LOADED_IMAGE_RAND_GUID: Guid = guid!(
-    0xf5a37b6d,
-    0x3344,
-    0x42a5,
-    [0xb6, 0xbb, 0x97, 0x86, 0x48, 0xc1, 0x89, 0x0a]
-);
+pub const LINUX_EFI_LOADED_IMAGE_RAND_GUID: Guid = guid!("f5a37b6d-3344-42a5-b6bb-978648c1890a");
 
 const EFI_LOADED_IMAGE_PROTOCOL_REVISION: u32 = 0x1000;
 
