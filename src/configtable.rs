@@ -11,16 +11,17 @@ use crate::EFI;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::ffi::c_void;
 use core::ptr::NonNull;
 use core::slice;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub(crate) struct Tuple(Guid, *const ());
+pub(crate) struct Tuple(Guid, *const c_void);
 
 pub enum ConfigurationTablePointer {
     Managed(NonNull<u8>),
-    Raw(*const ()),
+    Raw(*const c_void),
 }
 
 pub(crate) struct ConfigurationTable {
@@ -31,15 +32,15 @@ pub(crate) struct ConfigurationTable {
 impl ConfigurationTable {
     fn as_tuple(&self) -> Tuple {
         let p = match self.p {
-            Managed(p) => p.as_ptr() as *const (),
+            Managed(p) => p.as_ptr().cast(),
             Raw(p) => p,
         };
         Tuple(self.guid, p)
     }
 }
 
-impl From<*const ()> for ConfigurationTablePointer {
-    fn from(p: *const ()) -> Self {
+impl From<*const c_void> for ConfigurationTablePointer {
+    fn from(p: *const c_void) -> Self {
         Raw(p)
     }
 }

@@ -62,6 +62,7 @@ use crate::{
 };
 
 use core::cell::*;
+use core::ffi::c_void;
 use core::mem::*;
 use core::ops::*;
 use core::pin::*;
@@ -103,8 +104,8 @@ type VirtualAddress = u64;
 pub type Handle = usize;
 type Tpl = usize;
 #[repr(transparent)]
-pub struct Event(*mut ());
-type EventNotify = extern "efiapi" fn(Event, *const ());
+pub struct Event(*mut c_void);
+type EventNotify = extern "efiapi" fn(Event, *const c_void);
 pub type Lba = u64;
 
 pub(crate) fn new_handle() -> usize {
@@ -195,7 +196,7 @@ pub trait FileLoader {
     /// caller to ensure that `loadbuffer` points to a buffer with sufficient space.
     unsafe fn load_range<'a>(
         &self,
-        loadbuffer: *mut (),
+        loadbuffer: *mut c_void,
         offset: usize,
         size: usize,
     ) -> Result<(), &str>;
@@ -250,8 +251,8 @@ pub trait EfiProtocol {
     /// assumes that the struct is `#[repr(C)]` and exposes the C function pointers directly.
     /// In cases where the `EfiProtocol` implementation wraps a C struct in a different manner,
     /// this method may be overridden to produce the C struct pointer in another way.
-    fn as_proto_ptr(&self) -> *const () {
-        self as *const _ as *const ()
+    fn as_proto_ptr(&self) -> *const c_void {
+        self as *const _ as *const c_void
     }
 
     /// A reference to the `Guid` that identifies the implementation of the EFI protocol.

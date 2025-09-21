@@ -21,6 +21,7 @@ use crate::EFI_LOADED_IMAGE_PROTOCOL_GUID;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::ffi::c_void;
 use core::mem::{size_of, MaybeUninit};
 use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -91,29 +92,40 @@ type GetMemoryMap = extern "efiapi" fn(
     *mut usize,
     *mut u32,
 ) -> Status;
-type AllocatePool = extern "efiapi" fn(EfiMemoryType, usize, *mut *mut ()) -> Status;
-type FreePool = extern "efiapi" fn(*mut ()) -> Status;
+type AllocatePool = extern "efiapi" fn(EfiMemoryType, usize, *mut *mut c_void) -> Status;
+type FreePool = extern "efiapi" fn(*mut c_void) -> Status;
 
-type CreateEvent = extern "efiapi" fn(u32, Tpl, EventNotify, *const (), *mut Event) -> Status;
+type CreateEvent = extern "efiapi" fn(u32, Tpl, EventNotify, *const c_void, *mut Event) -> Status;
 type SetTimer = extern "efiapi" fn(Event, TimerDelay, u64) -> Status;
 type WaitForEvent = extern "efiapi" fn(usize, *const Event, *mut usize) -> Status;
 type SignalOrCheckOrCloseEvent = extern "efiapi" fn(Event) -> Status;
 
 type InstallProtocolInterface =
-    extern "efiapi" fn(*mut Handle, *const Guid, InterfaceType, *const ()) -> Status;
+    extern "efiapi" fn(*mut Handle, *const Guid, InterfaceType, *const c_void) -> Status;
 type ReinstallProtocolInterface =
-    extern "efiapi" fn(Handle, *const Guid, *const (), *const ()) -> Status;
-type UninstallProtocolInterface = extern "efiapi" fn(Handle, *const Guid, *const ()) -> Status;
-type HandleProtocol = extern "efiapi" fn(Handle, *const Guid, *mut *const ()) -> Status;
-type RegisterProtocolNotify = extern "efiapi" fn(*const Guid, Event, *mut *const ()) -> Status;
-type LocateHandle =
-    extern "efiapi" fn(LocateSearchType, *const Guid, *const (), *mut usize, *mut Handle) -> Status;
+    extern "efiapi" fn(Handle, *const Guid, *const c_void, *const c_void) -> Status;
+type UninstallProtocolInterface = extern "efiapi" fn(Handle, *const Guid, *const c_void) -> Status;
+type HandleProtocol = extern "efiapi" fn(Handle, *const Guid, *mut *const c_void) -> Status;
+type RegisterProtocolNotify = extern "efiapi" fn(*const Guid, Event, *mut *const c_void) -> Status;
+type LocateHandle = extern "efiapi" fn(
+    LocateSearchType,
+    *const Guid,
+    *const c_void,
+    *mut usize,
+    *mut Handle,
+) -> Status;
 type LocateDevicePath =
     extern "efiapi" fn(*const Guid, *mut *const DevicePath, *mut Handle) -> Status;
-type InstallConfigurationTable = extern "efiapi" fn(*const Guid, *const ()) -> Status;
+type InstallConfigurationTable = extern "efiapi" fn(*const Guid, *const c_void) -> Status;
 
-type LoadImage =
-    extern "efiapi" fn(Bool, Handle, *const DevicePath, *const (), usize, *mut Handle) -> Status;
+type LoadImage = extern "efiapi" fn(
+    Bool,
+    Handle,
+    *const DevicePath,
+    *const c_void,
+    usize,
+    *mut Handle,
+) -> Status;
 type StartImage = extern "efiapi" fn(Handle, *mut usize, *mut Char16) -> Status;
 type Exit = extern "efiapi" fn(Handle, Status, usize, *const Char16) -> Status;
 type UnloadImage = extern "efiapi" fn(Handle) -> Status;
@@ -127,7 +139,7 @@ type ConnectController = extern "efiapi" fn(Handle, Handle, *const DevicePath, B
 type DisconnectController = extern "efiapi" fn(Handle, Handle, Handle) -> Status;
 
 type OpenProtocol =
-    extern "efiapi" fn(Handle, *const Guid, *mut *const (), Handle, Handle, u32) -> Status;
+    extern "efiapi" fn(Handle, *const Guid, *mut *const c_void, Handle, Handle, u32) -> Status;
 type CloseProtocol = extern "efiapi" fn(Handle, *const Guid, Handle, Handle) -> Status;
 type OpenProtocolInformation = extern "efiapi" fn(
     Handle,
@@ -140,16 +152,16 @@ type ProtocolPerHandle = extern "efiapi" fn(Handle, *mut *const *const Guid, *mu
 type LocateHandleBuffer = extern "efiapi" fn(
     LocateSearchType,
     *const Guid,
-    *const (),
+    *const c_void,
     *mut usize,
     *mut *const Handle,
 ) -> Status;
-type LocateProtocol = extern "efiapi" fn(*const Guid, *const (), *mut *const ()) -> Status;
+type LocateProtocol = extern "efiapi" fn(*const Guid, *const c_void, *mut *const c_void) -> Status;
 
 type InstallMultipleProtocolInterfaces = unsafe extern "efiapi" fn(*mut Handle) -> Status;
 type UninstallMultipleProtocolInterfaces = unsafe extern "efiapi" fn(Handle) -> Status;
 
-type CalculateCrc32 = extern "efiapi" fn(*const (), usize, *mut u32) -> Status;
+type CalculateCrc32 = extern "efiapi" fn(*const c_void, usize, *mut u32) -> Status;
 
 type CopyMem = extern "efiapi" fn(*mut u8, *const u8, usize) -> *mut u8;
 type SetMem = extern "efiapi" fn(*mut u8, usize, u8) -> *mut u8;
@@ -366,7 +378,7 @@ extern "efiapi" fn get_memory_map(
 extern "efiapi" fn allocate_pool(
     pool_type: EfiMemoryType,
     size: usize,
-    buffer: *mut *mut (),
+    buffer: *mut *mut c_void,
 ) -> Status {
     log::trace!("AllocatePool() {size}");
     if buffer.is_null() {
@@ -381,7 +393,7 @@ extern "efiapi" fn allocate_pool(
     }
 }
 
-extern "efiapi" fn free_pool(buffer: *mut ()) -> Status {
+extern "efiapi" fn free_pool(buffer: *mut c_void) -> Status {
     if EFI.free_pool(buffer as _).is_ok() {
         return Status::EFI_SUCCESS;
     }
@@ -392,7 +404,7 @@ extern "efiapi" fn create_event(
     _type: u32,
     _notify_tpl: Tpl,
     _notify_function: EventNotify,
-    _notify_context: *const (),
+    _notify_context: *const c_void,
     _event: *mut Event,
 ) -> Status {
     log::warn!("UNIMPLEMENTED");
@@ -430,12 +442,12 @@ extern "efiapi" fn check_event(_event: Event) -> Status {
 
 struct ExternalEfiProtocol {
     protocol: Guid,
-    interface: *const (),
+    interface: *const c_void,
 }
 unsafe impl Send for ExternalEfiProtocol {}
 
 impl EfiProtocol for ExternalEfiProtocol {
-    fn as_proto_ptr(&self) -> *const () {
+    fn as_proto_ptr(&self) -> *const c_void {
         self.interface
     }
     fn guid(&self) -> &Guid {
@@ -447,7 +459,7 @@ extern "efiapi" fn install_protocol_interface(
     handle: *mut Handle,
     protocol: *const Guid,
     interface_type: InterfaceType,
-    interface: *const (),
+    interface: *const c_void,
 ) -> Status {
     if handle.is_null()
         || protocol.is_null()
@@ -487,7 +499,7 @@ extern "efiapi" fn install_protocol_interface(
 extern "efiapi" fn uninstall_protocol_interface(
     handle: Handle,
     protocol: *const Guid,
-    interface: *const (),
+    interface: *const c_void,
 ) -> Status {
     if handle == 0 || protocol.is_null() {
         return Status::EFI_UNSUPPORTED;
@@ -514,8 +526,8 @@ extern "efiapi" fn uninstall_protocol_interface(
 extern "efiapi" fn reinstall_protocol_interface(
     handle: Handle,
     protocol: *const Guid,
-    old_interface: *const (),
-    new_interface: *const (),
+    old_interface: *const c_void,
+    new_interface: *const c_void,
 ) -> Status {
     if handle == 0 || protocol.is_null() {
         return Status::EFI_UNSUPPORTED;
@@ -549,7 +561,7 @@ extern "efiapi" fn reinstall_protocol_interface(
 extern "efiapi" fn handle_protocol(
     handle: Handle,
     protocol: *const Guid,
-    interface: *mut *const (),
+    interface: *mut *const c_void,
 ) -> Status {
     open_protocol(
         handle,
@@ -564,7 +576,7 @@ extern "efiapi" fn handle_protocol(
 extern "efiapi" fn register_protocol_notify(
     _protocol: *const Guid,
     _event: Event,
-    _registration: *mut *const (),
+    _registration: *mut *const c_void,
 ) -> Status {
     log::warn!("UNIMPLEMENTED");
     Status::EFI_OUT_OF_RESOURCES
@@ -598,7 +610,7 @@ fn get_handle_vec(search_type: &LocateSearchType, protocol: *const Guid) -> Vec<
 extern "efiapi" fn locate_handle(
     search_type: LocateSearchType,
     protocol: *const Guid,
-    _search_key: *const (),
+    _search_key: *const c_void,
     buffer_size: *mut usize,
     buffer: *mut Handle,
 ) -> Status {
@@ -636,7 +648,7 @@ fn compare_device_path(
     protocol: &Guid,
     device_path: &DevicePath,
     db: &ProtocolDb,
-) -> Option<(isize, (Handle, *const ()))> {
+) -> Option<(isize, (Handle, *const c_void))> {
     // Check if this handle implements both the device path protocol
     // and the requested protocol
     let guid = &entry.0 .1;
@@ -651,7 +663,7 @@ fn compare_device_path(
     let bytes_equal = device_path.is_prefix_of(dp)?;
 
     let devpathptr = unsafe { (device_path as *const _ as *const u8).offset(bytes_equal) };
-    Some((bytes_equal, (entry.0 .0, devpathptr as *const ())))
+    Some((bytes_equal, (entry.0 .0, devpathptr as *const c_void)))
 }
 
 extern "efiapi" fn locate_device_path(
@@ -695,7 +707,7 @@ extern "efiapi" fn locate_device_path(
     ret
 }
 
-extern "efiapi" fn install_configuration_table(guid: *const Guid, table: *const ()) -> Status {
+extern "efiapi" fn install_configuration_table(guid: *const Guid, table: *const c_void) -> Status {
     if guid.is_null() {
         return Status::EFI_INVALID_PARAMETER;
     }
@@ -704,7 +716,7 @@ extern "efiapi" fn install_configuration_table(guid: *const Guid, table: *const 
 }
 
 struct LoadImageFileLoader {
-    source_buffer: *const (),
+    source_buffer: *const c_void,
     source_size: usize,
 }
 
@@ -728,7 +740,7 @@ impl FileLoader for LoadImageFileLoader {
 
     unsafe fn load_range<'a>(
         &self,
-        loadbuffer: *mut (),
+        loadbuffer: *mut c_void,
         offset: usize,
         size: usize,
     ) -> Result<(), &str> {
@@ -751,7 +763,7 @@ extern "efiapi" fn load_image(
     _boot_policy: Bool,
     _parent_image_handle: Handle,
     _device_path: *const DevicePath,
-    source_buffer: *const (),
+    source_buffer: *const c_void,
     source_size: usize,
     image_handle: *mut Handle,
 ) -> Status {
@@ -871,7 +883,7 @@ extern "efiapi" fn disconnect_controller(
 extern "efiapi" fn open_protocol(
     handle: Handle,
     protocol: *const Guid,
-    interface: *mut *const (),
+    interface: *mut *const c_void,
     _agent_handle: Handle,
     _controller_handle: Handle,
     attributes: u32,
@@ -962,7 +974,7 @@ extern "efiapi" fn protocols_per_handle(
 extern "efiapi" fn locate_handle_buffer(
     search_type: LocateSearchType,
     protocol: *const Guid,
-    _search_key: *const (),
+    _search_key: *const c_void,
     no_handles: *mut usize,
     buffer: *mut *const Handle,
 ) -> Status {
@@ -997,8 +1009,8 @@ extern "efiapi" fn locate_handle_buffer(
 
 extern "efiapi" fn locate_protocol(
     protocol: *const Guid,
-    _registration: *const (),
-    interface: *mut *const (),
+    _registration: *const c_void,
+    interface: *mut *const c_void,
 ) -> Status {
     if protocol.is_null() || interface.is_null() {
         return Status::EFI_INVALID_PARAMETER;
@@ -1034,8 +1046,10 @@ extern "efiapi" {
     fn uninstall_multiple_protocol_interfaces_wrapper(handle: Handle) -> Status;
 }
 
-unsafe fn parse_multiproto_varargs(p: *const *const ()) -> Option<BTreeMap<Guid, *const ()>> {
-    let mut m: BTreeMap<Guid, *const ()> = BTreeMap::new();
+unsafe fn parse_multiproto_varargs(
+    p: *const *const c_void,
+) -> Option<BTreeMap<Guid, *const c_void>> {
+    let mut m: BTreeMap<Guid, *const c_void> = BTreeMap::new();
     let mut p = p;
     while !(*p).is_null() {
         let g = &*(*p as *const Guid);
@@ -1055,7 +1069,7 @@ unsafe fn parse_multiproto_varargs(p: *const *const ()) -> Option<BTreeMap<Guid,
 #[no_mangle]
 extern "efiapi" fn install_multiple_protocol_interfaces(
     handle: *mut Handle,
-    p: *const *const (),
+    p: *const *const c_void,
 ) -> Status {
     if handle.is_null() {
         return Status::EFI_INVALID_PARAMETER;
@@ -1117,7 +1131,7 @@ extern "efiapi" fn install_multiple_protocol_interfaces(
 #[no_mangle]
 extern "efiapi" fn uninstall_multiple_protocol_interfaces(
     handle: Handle,
-    p: *const *const (),
+    p: *const *const c_void,
 ) -> Status {
     if handle == 0 {
         return Status::EFI_INVALID_PARAMETER;
@@ -1149,7 +1163,11 @@ extern "efiapi" fn uninstall_multiple_protocol_interfaces(
     Status::EFI_SUCCESS
 }
 
-extern "efiapi" fn calculate_crc32(data: *const (), datasize: usize, crc32: *mut u32) -> Status {
+extern "efiapi" fn calculate_crc32(
+    data: *const c_void,
+    datasize: usize,
+    crc32: *mut u32,
+) -> Status {
     let (crc, slice) = unsafe {
         (
             &mut *crc32,

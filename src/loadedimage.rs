@@ -42,11 +42,11 @@ pub struct EfiLoadedImage {
     parent_handle: Handle,
     system_table: *const SystemTable,
     device_handle: Handle,
-    file_path: *const (), //DevicePath,
+    file_path: *const c_void, //DevicePath,
     pub reserved: usize,
     load_options_size: u32,
-    load_options: *const (),
-    image_base: *const (),
+    load_options: *const c_void,
+    image_base: *const c_void,
     image_size: u64,
     image_code_type: EfiMemoryType,
     image_data_type: EfiMemoryType,
@@ -162,7 +162,7 @@ impl LoadedImageData {
 
         let c = &self.load_options;
         let loaded_image = unsafe { &mut *self.loaded_image };
-        loaded_image.load_options = c.as_ptr() as *const ();
+        loaded_image.load_options = c.as_ptr().cast();
         loaded_image.load_options_size = (c.len() * core::mem::size_of::<u16>()) as u32;
     }
 
@@ -176,7 +176,7 @@ extern "C" {
     fn start_image(
         image_handle: Handle,
         system_table: *const SystemTable,
-        entrypoint: *const (),
+        entrypoint: *const c_void,
         sp_buffer: *const usize,
         stack: *mut u8,
     ) -> Status;
