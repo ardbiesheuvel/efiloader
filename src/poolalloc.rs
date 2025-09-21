@@ -3,8 +3,8 @@
 // Author: Ard Biesheuvel <ardb@google.com>
 
 use crate::memmap;
-use crate::MemoryMap;
 use crate::EfiMemoryType;
+use crate::MemoryMap;
 use crate::Placement;
 use crate::EFI_MEMORY_XP;
 

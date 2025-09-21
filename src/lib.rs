@@ -287,7 +287,10 @@ impl Deref for EfiContextHolder {
     type Target = EfiContext;
 
     fn deref(&self) -> &Self::Target {
-        &self.0.get().expect("efiloader::init() has not been called yet")
+        &self
+            .0
+            .get()
+            .expect("efiloader::init() has not been called yet")
     }
 }
 

@@ -411,13 +411,7 @@ impl MemoryMap {
 
     pub(crate) fn free_pages(&self, base: u64, pages: usize) -> Result<(), ()> {
         let size = pages << EFI_PAGE_SHIFT;
-        self.convert_region(
-            base,
-            size,
-            None,
-            EfiConventionalMemory,
-            0,
-        )
+        self.convert_region(base, size, None, EfiConventionalMemory, 0)
     }
 
     pub(crate) fn allocate_pages(

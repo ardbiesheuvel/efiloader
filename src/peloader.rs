@@ -7,7 +7,7 @@ use crate::memorytype::*;
 use crate::EfiContext;
 use crate::MemoryMapper;
 use crate::EFI_PAGE_MASK;
-use crate::{FileLoader, EfiMemoryType, Placement};
+use crate::{EfiMemoryType, FileLoader, Placement};
 
 use alloc::vec::Vec;
 use core::mem::{size_of, MaybeUninit};
