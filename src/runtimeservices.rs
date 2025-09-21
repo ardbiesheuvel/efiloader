@@ -6,6 +6,8 @@ use crate::UEFI_REVISION;
 use crate::{memorytype::*, status::*, tableheader::*};
 use crate::{Bool, Char16, Guid, PhysicalAddress};
 
+use core::ffi::c_void;
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct Time {
@@ -64,14 +66,14 @@ type SetVirtualAddressMap = extern "efiapi" fn(
 ) -> Status;
 
 type ConvertPointer =
-    extern "efiapi" fn(_debug_disposition: usize, _address: *const *mut ()) -> Status;
+    extern "efiapi" fn(_debug_disposition: usize, _address: *const *mut c_void) -> Status;
 
 pub type GetVariable = extern "efiapi" fn(
     _variable_name: *const Char16,
     _vendor_guid: *const Guid,
     _attributes: *mut u32,
     _data_size: *mut usize,
-    _data: *mut (),
+    _data: *mut c_void,
 ) -> Status;
 
 pub type GetNextVariableName = extern "efiapi" fn(
@@ -85,7 +87,7 @@ pub type SetVariable = extern "efiapi" fn(
     _vendor_guid: *const Guid,
     _attributes: *const u32,
     _data_size: *const usize,
-    _data: *const (),
+    _data: *const c_void,
 ) -> Status;
 
 type GetNextHighMonotonicCount = extern "efiapi" fn(_high_count: *mut u32) -> Status;
@@ -94,7 +96,7 @@ pub type ResetSystem = extern "efiapi" fn(
     _reset_type: ResetType,
     _reset_status: Status,
     _data_size: usize,
-    _reset_data: *const (),
+    _reset_data: *const c_void,
 ) -> Status;
 
 type UpdateCapsule = extern "efiapi" fn(
@@ -170,7 +172,10 @@ extern "efiapi" fn set_virtual_address_map(
     Status::EFI_UNSUPPORTED
 }
 
-extern "efiapi" fn convert_pointer(_debug_disposition: usize, _address: *const *mut ()) -> Status {
+extern "efiapi" fn convert_pointer(
+    _debug_disposition: usize,
+    _address: *const *mut c_void,
+) -> Status {
     Status::EFI_UNSUPPORTED
 }
 
@@ -179,7 +184,7 @@ extern "efiapi" fn get_variable(
     _vendor_guid: *const Guid,
     _attributes: *mut u32,
     _data_size: *mut usize,
-    _data: *mut (),
+    _data: *mut c_void,
 ) -> Status {
     Status::EFI_NOT_FOUND
 }
@@ -197,7 +202,7 @@ extern "efiapi" fn set_variable(
     _vendor_guid: *const Guid,
     _attributes: *const u32,
     _data_size: *const usize,
-    _data: *const (),
+    _data: *const c_void,
 ) -> Status {
     Status::EFI_UNSUPPORTED
 }
@@ -210,7 +215,7 @@ extern "efiapi" fn reset_system(
     _reset_type: ResetType,
     _reset_status: Status,
     _data_size: usize,
-    _reset_data: *const (),
+    _reset_data: *const c_void,
 ) -> Status {
     Status::EFI_UNSUPPORTED
 }

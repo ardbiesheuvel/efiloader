@@ -10,6 +10,7 @@ use crate::EFI_PAGE_MASK;
 use crate::{EfiMemoryType, FileLoader, Placement};
 
 use alloc::vec::Vec;
+use core::ffi::c_void;
 use core::mem::{size_of, MaybeUninit};
 use core::ops::Range;
 use core::slice;
@@ -137,7 +138,7 @@ impl<'a> PeLoader<'a> {
             let mut h = MaybeUninit::<DosHeader>::uninit();
             unsafe {
                 loader
-                    .load_range(&mut h as *mut _ as *mut (), 0, size_of::<DosHeader>())
+                    .load_range(h.as_mut_ptr().cast(), 0, size_of::<DosHeader>())
                     .ok()?;
                 h.assume_init()
             }
@@ -160,7 +161,7 @@ impl<'a> PeLoader<'a> {
             unsafe {
                 loader
                     .load_range(
-                        &mut h as *mut _ as *mut (),
+                        h.as_mut_ptr().cast(),
                         doshdr.pe_offset as usize,
                         size_of::<PeHeader>(),
                     )
@@ -196,11 +197,7 @@ impl<'a> PeLoader<'a> {
             let mut v = Vec::<PeTable>::with_capacity(petable_count);
             unsafe {
                 loader
-                    .load_range(
-                        v.as_mut_ptr() as *mut (),
-                        petable_offset as usize,
-                        petable_size,
-                    )
+                    .load_range(v.as_mut_ptr().cast(), petable_offset as usize, petable_size)
                     .ok()?;
                 v.set_len(petable_count);
             }
@@ -220,7 +217,7 @@ impl<'a> PeLoader<'a> {
             unsafe {
                 loader
                     .load_range(
-                        v.as_mut_ptr() as *mut (),
+                        v.as_mut_ptr().cast(),
                         section_offset as usize,
                         sections_size,
                     )
@@ -341,7 +338,7 @@ impl<'a> PeLoader<'a> {
         unsafe {
             self.file_loader
                 .load_range(
-                    buf.as_mut_ptr() as *mut (),
+                    buf.as_mut_ptr().cast(),
                     0,
                     self.pe_header.size_of_headers as usize,
                 )
@@ -357,7 +354,7 @@ impl<'a> PeLoader<'a> {
             );
             unsafe {
                 self.file_loader
-                    .load_range(buf[va].as_mut_ptr() as *mut (), ra, vs.min(rs))
+                    .load_range(buf[va].as_mut_ptr().cast(), ra, vs.min(rs))
                     .ok()?;
             }
             if vs > rs {
@@ -442,8 +439,8 @@ impl PeImage<'_> {
         Some(())
     }
 
-    pub(crate) fn image_base(&self) -> *const () {
-        self.loaded_image.as_ptr() as _
+    pub(crate) fn image_base(&self) -> *const c_void {
+        self.loaded_image.as_ptr().cast()
     }
 
     pub(crate) fn image_size(&self) -> u64 {

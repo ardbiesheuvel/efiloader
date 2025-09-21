@@ -9,6 +9,7 @@ use crate::Lba;
 use crate::{guid, Bool, Guid};
 
 use alloc::boxed::Box;
+use core::ffi::c_void;
 
 const EFI_BLOCK_IO_PROTOCOL_REVISION: u64 = 0x00010000;
 
@@ -55,7 +56,7 @@ type ReadWriteBlocks = extern "efiapi" fn(
     media_id: u32,
     lba: Lba,
     buffer_size: usize,
-    buffer: *mut (),
+    buffer: *mut c_void,
 ) -> Status;
 
 type FlushBlocks = extern "efiapi" fn(this: *mut EfiBlockIoProtocol) -> Status;
@@ -111,7 +112,7 @@ extern "efiapi" fn read_blocks(
     media_id: u32,
     lba: Lba,
     buffer_size: usize,
-    buffer: *mut (),
+    buffer: *mut c_void,
 ) -> Status {
     log::trace!("Calling read_blocks");
     let this = unsafe { &mut *this };
@@ -144,7 +145,7 @@ extern "efiapi" fn write_blocks(
     _media_id: u32,
     _lba: Lba,
     _buffer_size: usize,
-    _buffer: *mut (),
+    _buffer: *mut c_void,
 ) -> Status {
     Status::EFI_WRITE_PROTECTED
 }

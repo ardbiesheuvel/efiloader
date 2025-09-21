@@ -12,7 +12,7 @@ use crate::{guid, Guid};
 use crate::{status::*, Bool};
 
 use alloc::boxed::Box;
-use core::mem::*;
+use core::{ffi::c_void, mem::*};
 
 pub const EFI_LOAD_FILE2_PROTOCOL_GUID: Guid = guid!(
     0x4006c0c1,
@@ -21,8 +21,13 @@ pub const EFI_LOAD_FILE2_PROTOCOL_GUID: Guid = guid!(
     [0x99, 0x6d, 0x4a, 0x6c, 0x87, 0x24, 0xe0, 0x6d]
 );
 
-type LoadFile =
-    extern "efiapi" fn(*mut EfiLoadFile2, *const DevicePath, Bool, *mut usize, *mut ()) -> Status;
+type LoadFile = extern "efiapi" fn(
+    *mut EfiLoadFile2,
+    *const DevicePath,
+    Bool,
+    *mut usize,
+    *mut c_void,
+) -> Status;
 
 #[repr(C)]
 pub struct EfiLoadFile2 {
@@ -60,7 +65,7 @@ extern "efiapi" fn load_file(
     file_path: *const DevicePath,
     boot_policy: Bool,
     buffer_size: *mut usize,
-    buffer: *mut (),
+    buffer: *mut c_void,
 ) -> Status {
     if boot_policy != 0 {
         return Status::EFI_UNSUPPORTED;
