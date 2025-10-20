@@ -52,7 +52,7 @@
 
 macro_rules! align_up {
     ($value:expr, $alignment:expr) => {
-        (($value - 1) | ($alignment - 1)) + 1
+        (($value.wrapping_sub(1)) | ($alignment - 1)).wrapping_add(1)
     };
 }
 

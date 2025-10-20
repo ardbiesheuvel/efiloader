@@ -438,10 +438,10 @@ impl MemoryMap {
             MaxAlignMask(max, mask) => {
                 if let Some(desc) = mm
                     .values()
-                    .take_while(|d| ((d.physical_start - 1) | mask) + (p << EFI_PAGE_SHIFT) <= max)
+                    .take_while(|d| ((d.physical_start.wrapping_sub(1)) | mask).wrapping_add(p << EFI_PAGE_SHIFT) <= max)
                     .filter(|d| {
                         let num_pages =
-                            p + (mask - ((d.physical_start - 1) & mask) >> EFI_PAGE_SHIFT);
+                            p + (mask.wrapping_sub((d.physical_start.wrapping_sub(1)) & mask) >> EFI_PAGE_SHIFT);
                         d.r#type == EfiConventionalMemory && d.number_of_pages >= num_pages
                     })
                     .last()
@@ -468,7 +468,7 @@ impl MemoryMap {
                     .filter_map(|d| {
                         // Include the number of pages lost to alignment in the page count
                         let num_pages =
-                            p + (mask - ((d.physical_start - 1) & mask) >> EFI_PAGE_SHIFT);
+                            p + (mask.wrapping_sub((d.physical_start.wrapping_sub(1)) & mask) >> EFI_PAGE_SHIFT);
                         if d.r#type == EfiConventionalMemory && d.number_of_pages >= num_pages {
                             let sl =
                                 1 + ((d.number_of_pages - num_pages) << EFI_PAGE_SHIFT) / align;
@@ -489,7 +489,7 @@ impl MemoryMap {
                     .find(|e: &(Range<u64>, &EfiMemoryDescriptor)| e.0.contains(&index))
                 {
                     let offset = (index - entry.0.start) * align;
-                    ((entry.1.physical_start - 1) | mask) + 1 + offset
+                    ((entry.1.physical_start.wrapping_sub(1)) | mask).wrapping_add(1) + offset
                 } else {
                     return None;
                 }
