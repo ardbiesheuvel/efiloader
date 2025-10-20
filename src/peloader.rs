@@ -458,7 +458,7 @@ impl PeImage<'_> {
         self.loaded_image[self.pe_loader.pe_header.address_of_entrypoint as usize].as_ptr() as _
     }
 
-    pub(crate) fn sections(&self) -> PeImageSectionIterator {
+    pub(crate) fn sections(&self) -> PeImageSectionIterator<'_> {
         PeImageSectionIterator {
             index: 0,
             pe_image: self,
