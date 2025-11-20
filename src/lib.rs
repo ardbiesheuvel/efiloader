@@ -318,7 +318,7 @@ pub(crate) fn efi_system_table() -> *const SystemTable {
 ///
 /// A [`Random`] implementation may be provided via `rng`.
 pub fn init(
-    con: Option<&'static (dyn SimpleConsole)>,
+    con: Option<&'static dyn SimpleConsole>,
     memmap: MemoryMap,
     mapper: impl MemoryMapper + 'static,
     rng: Option<impl Random + 'static>,
