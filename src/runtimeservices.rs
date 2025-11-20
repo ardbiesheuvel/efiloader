@@ -83,8 +83,8 @@ pub type GetNextVariableName = extern "efiapi" fn(
 pub type SetVariable = extern "efiapi" fn(
     _variable_name: *const Char16,
     _vendor_guid: *const Guid,
-    _attributes: *const u32,
-    _data_size: *const usize,
+    _attributes: u32,
+    _data_size: usize,
     _data: *const (),
 ) -> Status;
 
@@ -195,8 +195,8 @@ extern "efiapi" fn get_next_variable_name(
 extern "efiapi" fn set_variable(
     _variable_name: *const Char16,
     _vendor_guid: *const Guid,
-    _attributes: *const u32,
-    _data_size: *const usize,
+    _attributes: u32,
+    _data_size: usize,
     _data: *const (),
 ) -> Status {
     Status::EFI_UNSUPPORTED
