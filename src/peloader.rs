@@ -269,7 +269,11 @@ impl<'a> PeLoader<'a> {
         })
     }
 
-    unsafe fn apply_relocations(buf: &mut [MaybeUninit<u8>], tbl: &PeTable) -> Result<(), ()> {
+    unsafe fn apply_relocations(
+        &self,
+        buf: &mut [MaybeUninit<u8>],
+        tbl: &PeTable,
+    ) -> Result<(), ()> {
         let (base, limit) = {
             let l = buf.len() as isize;
             let base = buf.as_mut_ptr() as *mut u8;
@@ -312,7 +316,9 @@ impl<'a> PeLoader<'a> {
                     IMAGE_REL_BASED_ABSOLUTE => (),
                     IMAGE_REL_BASED_DIR64 => {
                         let p = p as *mut u64;
-                        p.write_unaligned(p.read_unaligned() + base as u64);
+                        p.write_unaligned(
+                            p.read_unaligned() - self.pe_header.image_base + base as u64,
+                        );
                     }
                     _ => {
                         return Err(());
@@ -368,7 +374,7 @@ impl<'a> PeLoader<'a> {
 
         if let Some(dir) = self.table_directory.get(BASE_RELOC_TABLE_IDX) {
             log::trace!("Applying PE relocations");
-            unsafe { Self::apply_relocations(buf, dir) }.ok()?;
+            unsafe { self.apply_relocations(buf, dir) }.ok()?;
         }
 
         // TODO free pages on failure
