@@ -96,6 +96,9 @@ impl ConfigTableDb {
                 .allocate_pool::<Tuple>(EfiRuntimeServicesData, len)
                 .unwrap();
 
+            // SAFETY: `c` points to a pool allocation of `len` entries, which is owned by the config
+            // table database until it is replaced and freed above. Note that entries remain
+            // uninitialized until they are populated below, but only populated entries are read.
             *slice = unsafe { slice::from_raw_parts_mut(c.as_ptr(), len) };
 
             st.configuration_table = slice.as_ptr() as *mut _;

@@ -30,6 +30,11 @@ impl PoolAllocator {
             return Err(());
         }
         self.grow_region(grow, mm)?;
+        // SAFETY: For pools created by new(), the heap covers the first `allocated` bytes of an
+        // arena of ARENA_SIZE bytes that is never freed, and the check above ensures that it is only
+        // extended into the remainder of the arena, which grow_region() has just converted to the
+        // pool's memory type. Note that this does not hold for pools created by from_slice() that
+        // are smaller than ARENA_SIZE.
         unsafe { Ok(self.heap.extend(grow)) }
     }
 
@@ -102,6 +107,9 @@ impl PoolAllocator {
     }
 
     pub(crate) fn deallocate(&mut self, buffer: *const u8, layout: Layout) {
+        // SAFETY: This is only called by MemoryMap::free_pool(), for allocations that allocate()
+        // returned, and that were recorded along with their layout. This means `buffer` is a
+        // non-NULL pointer that was returned by this heap for the same layout.
         unsafe {
             self.heap
                 .deallocate(NonNull::new_unchecked(buffer as _), layout)

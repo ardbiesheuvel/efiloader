@@ -46,6 +46,9 @@ pub struct EfiBlockIoProtocol {
     loader: Box<dyn FileLoader + Send + 'static>,
     _media: Box<EfiBlockIoMedia>,
 }
+
+// SAFETY: The only member that is not Send is `media`, which points to the EfiBlockIoMedia instance
+// owned via `_media`, and so it is transferred along with it.
 unsafe impl Send for EfiBlockIoProtocol {}
 
 type Reset<T> = extern "efiapi" fn(this: *mut T, extended_verification: Bool) -> Status;
@@ -114,6 +117,9 @@ extern "efiapi" fn read_blocks(
     buffer: *mut (),
 ) -> Status {
     log::trace!("Calling read_blocks");
+    // SAFETY: The UEFI spec requires `this` to point to the protocol instance that this function was
+    // called through, which is an EfiBlockIoProtocol instance in the protocol database, given that
+    // this function is not exposed in any other way.
     let this = unsafe { &mut *this };
     if media_id != this._media.media_id {
         return Status::EFI_MEDIA_CHANGED;
@@ -125,6 +131,7 @@ extern "efiapi" fn read_blocks(
         return Status::EFI_BAD_BUFFER_SIZE;
     }
 
+    // SAFETY: The UEFI spec requires `buffer` to be valid for writes of `buffer_size` bytes.
     let ret = if let Ok(_) = unsafe {
         this.loader.load_range(
             buffer,

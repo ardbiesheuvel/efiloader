@@ -58,6 +58,8 @@ impl DevicePath {
             let p1 = l as *const _ as *const u8;
             let p2 = r as *const _ as *const u8;
             let s = l.size as isize;
+            // SAFETY: `l` and `r` point to nodes of well formed device paths, and the size fields
+            // in their headers are both equal to `s`, and so each node covers `s` bytes.
             let (s1, s2) = unsafe {
                 (
                     core::slice::from_raw_parts(p1, s as usize),
@@ -69,7 +71,9 @@ impl DevicePath {
             }
 
             // Advance to the next node
+            // SAFETY: `l` is not an end node, and so it is followed by another node at offset `s`.
             l = unsafe { &*(p1.offset(s) as *const DevicePath) };
+            // SAFETY: `r` has the same header as `l`, and so it is followed by another node too.
             r = unsafe { &*(p2.offset(s) as *const DevicePath) };
             ret += s;
         }

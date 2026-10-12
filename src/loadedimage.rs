@@ -56,6 +56,10 @@ pub struct EfiLoadedImage {
     image_handle: Handle,
     entrypoint: *const u8,
 }
+
+// SAFETY: EfiLoadedImage instances are only accessed by the EFI runtime, and by the EFI images it
+// starts. EFI boot services are single threaded, so sending them to another thread cannot result
+// in data races.
 unsafe impl Send for EfiLoadedImage {}
 
 impl EfiProtocol for EfiLoadedImage {
@@ -122,6 +126,9 @@ impl LoadedImageData {
 
 impl Drop for LoadedImageData {
     fn drop(&mut self) {
+        // SAFETY: `loaded_image` points to the pinned EfiLoadedImage that new() installed into the
+        // protocol database, which is never uninstalled by this crate, and no other references to
+        // it exist unless the image is running.
         let loaded_image = unsafe { &mut *self.loaded_image };
         loaded_image.load_options = ptr::null();
         loaded_image.load_options_size = 0;
@@ -142,6 +149,12 @@ impl EfiLoadedImage {
             s.unwrap().as_ptr()
         };
 
+        // SAFETY: `stack` points to a 16 byte aligned pool allocation of EFI_STACK_SIZE bytes, and
+        // so offsetting it by EFI_STACK_SIZE produces a suitably aligned pointer to the top of the
+        // stack. `entrypoint` points to the entry point of a PE/COFF image that was loaded and
+        // relocated by PeLoader, which is called with the image handle and system table pointer as
+        // arguments, as the UEFI spec requires. start_image() records the stack pointer in
+        // `reserved`, so that Exit() can return from start_image() via exit_image().
         let ret = unsafe {
             start_image(
                 self.image_handle,
@@ -161,12 +174,17 @@ impl LoadedImageData {
         self.load_options = load_options;
 
         let c = &self.load_options;
+        // SAFETY: `loaded_image` points to the pinned EfiLoadedImage that new() installed into the
+        // protocol database, which is never uninstalled by this crate, and no other references to
+        // it exist unless the image is running.
         let loaded_image = unsafe { &mut *self.loaded_image };
         loaded_image.load_options = c.as_ptr() as *const ();
         loaded_image.load_options_size = (c.len() * core::mem::size_of::<u16>()) as u32;
     }
 
     pub fn start_image(&mut self) -> Status {
+        // SAFETY: `loaded_image` points to the pinned EfiLoadedImage that new() installed into the
+        // protocol database, which is never uninstalled by this crate.
         let loaded_image = unsafe { &mut *self.loaded_image };
         loaded_image.start_image()
     }

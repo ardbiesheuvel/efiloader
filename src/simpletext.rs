@@ -112,8 +112,14 @@ extern "efiapi" fn read_key_stroke(this: *mut EfiSimpleTextInput, key: *mut KeyS
         return Status::EFI_INVALID_PARAMETER;
     }
 
+    // SAFETY: `this` is not NULL, and the UEFI spec requires it to point to the protocol instance
+    // that this function was called through, which is the first field of a SimpleTextInput
+    // instance, given that it is the only one this crate exposes. As SimpleTextInput is repr(C),
+    // `this` can be cast to a pointer to it.
     let this = unsafe { &*(this as *mut SimpleTextInput) };
     if let Some(ks) = this.read_key_stroke() {
+        // SAFETY: `key` is not NULL, and the UEFI spec requires it to point to a writable
+        // EFI_INPUT_KEY.
         let k = unsafe { &mut *key };
         *k = ks;
         Status::EFI_SUCCESS
@@ -212,6 +218,8 @@ impl EfiProtocol for SimpleTextInput {
     }
 }
 
+// SAFETY: The only member that is not Send is the `wait_for_key` event pointer, which is always
+// NULL, as events are not supported.
 unsafe impl Send for SimpleTextInput {}
 
 extern "efiapi" fn output_string(this: *mut EfiSimpleTextOutput, string: *const Char16) -> Status {
@@ -219,6 +227,10 @@ extern "efiapi" fn output_string(this: *mut EfiSimpleTextOutput, string: *const 
         return Status::EFI_INVALID_PARAMETER;
     }
 
+    // SAFETY: Neither pointer is NULL. `this` must point to the protocol instance that this
+    // function was called through, which is the first field of the repr(C) SimpleTextOutput
+    // instance that this crate exposes, and so it can be cast to a pointer to it. `string` must
+    // point to a NUL terminated UCS-2 string, as the UEFI spec requires.
     let (this, string) = unsafe {
         (
             &mut *(this as *mut SimpleTextOutput),
@@ -264,6 +276,8 @@ extern "efiapi" fn query_mode(
 
     match mode_number {
         0 => {
+            // SAFETY: Neither pointer is NULL, and the UEFI spec requires them to point to writable
+            // UINTNs.
             let (columns, rows) = unsafe { (&mut *columns, &mut *rows) };
             (*columns, *rows) = (80, 25);
             Status::EFI_SUCCESS
@@ -297,6 +311,8 @@ extern "efiapi" fn clear_screen(this: *mut EfiSimpleTextOutput) -> Status {
     }
 
     log::trace!("Clear screen");
+    // SAFETY: `this` is not NULL, and points to the first field of the repr(C) SimpleTextOutput
+    // instance that this crate exposes, and so it can be cast to a pointer to it.
     let this = unsafe { &mut *(this as *mut SimpleTextOutput) };
     (this.conout)("\x1b[=3h\x1b[2J\x1b[H");
     this.mode.cursor_column = 0;
@@ -317,6 +333,8 @@ extern "efiapi" fn set_cursor_position(
         return Status::EFI_UNSUPPORTED;
     }
     log::trace!("Set cursor position to {row},{column}");
+    // SAFETY: `this` is not NULL, and points to the first field of the repr(C) SimpleTextOutput
+    // instance that this crate exposes, and so it can be cast to a pointer to it.
     let this = unsafe { &mut *(this as *mut SimpleTextOutput) };
     this.mode.cursor_column = column as i32;
     this.mode.cursor_row = row as i32;
@@ -382,4 +400,6 @@ impl EfiProtocol for SimpleTextOutput {
     }
 }
 
+// SAFETY: The only member that is not Send is `text_output.mode`, which points to the `mode` field
+// of the same pinned instance, and so it is transferred along with it.
 unsafe impl Send for SimpleTextOutput {}

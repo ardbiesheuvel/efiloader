@@ -70,20 +70,28 @@ extern "efiapi" fn load_file(
         return Status::EFI_INVALID_PARAMETER;
     }
 
+    // SAFETY: The UEFI spec requires `file_path` to point to a valid device path.
     let file_path = unsafe { &*file_path };
     if file_path._type != EFI_DEV_END_PATH {
         return Status::EFI_NOT_FOUND;
     }
 
+    // SAFETY: The UEFI spec requires `this` to point to the protocol instance that this function was
+    // called through, which is the EfiLoadFile2 instance installed by install(), given that this
+    // function is not exposed in any other way.
     let this = unsafe { &mut *this };
     let filesize = this.loader.get_size();
 
+    // SAFETY: `buffer_size` is not NULL, and the UEFI spec requires it to point to a valid UINTN.
     let buffer_size = unsafe { &mut *buffer_size };
     if *buffer_size < filesize || buffer.is_null() {
         *buffer_size = filesize;
         return Status::EFI_BUFFER_TOO_SMALL;
     }
 
+    // SAFETY: `buffer` is not NULL, and the UEFI spec requires it to be valid for writes of
+    // `*buffer_size` bytes, which is at least `filesize`, and not to be accessed by the caller while
+    // this call is in progress.
     let buffer =
         unsafe { core::slice::from_raw_parts_mut(buffer as *mut MaybeUninit<u8>, filesize) };
 

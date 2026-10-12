@@ -20,6 +20,10 @@ impl TableHeader {
         self.crc32 = 0;
         compiler_fence(Ordering::Release);
 
+        // SAFETY: TableHeader is only used as the first field of repr(C) EFI tables, whose size is
+        // recorded in `header_size`, and so `header_size` bytes can be read starting at `self`.
+        // Note that this includes padding, which is not guaranteed to be initialized (e.g., after
+        // the system table's FirmwareRevision field).
         let s = unsafe {
             slice::from_raw_parts(self as *const _ as *const u8, self.header_size as usize)
         };

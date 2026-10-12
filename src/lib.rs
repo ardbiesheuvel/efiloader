@@ -193,6 +193,10 @@ pub trait FileLoader {
 
     /// Copies `size` bytes from the file starting at `offset` into `loadbuffer`. It is up to the
     /// caller to ensure that `loadbuffer` points to a buffer with sufficient space.
+    ///
+    /// # Safety
+    ///
+    /// `loadbuffer` must be valid for writes of `size` bytes.
     unsafe fn load_range<'a>(
         &self,
         loadbuffer: *mut (),

@@ -12,6 +12,7 @@ const CTR_DMINLINE_MASK: u64 = 0xf;
 
 #[cfg(target_arch = "aarch64")]
 pub fn dcache_clean_to_pou(range: &Range<usize>) {
+    // SAFETY: Reading CTR_EL0 has no side effects, and only the output register is modified.
     let ctr = unsafe {
         let mut l: u64;
         asm!("mrs {reg}, ctr_el0", // CTR: cache type register
@@ -30,6 +31,9 @@ pub fn dcache_clean_to_pou(range: &Range<usize>) {
         let mut line: usize = range.start;
 
         for _ in 0..num_lines {
+            // SAFETY: Cleaning a cache line to the PoU does not affect the contents of memory as
+            // observed by the program. `line` is covered by `range`, which describes a region of a
+            // loaded image, and is therefore mapped.
             unsafe {
                 asm!("dc cvau, {reg}",
                     reg = in(reg) line,

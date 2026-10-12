@@ -37,6 +37,7 @@ extern "efiapi" fn get_memory_attributes(
     let end = start + length as usize;
 
     if let Some(a) = mm.query_range(&(start..end)) {
+        // SAFETY: The UEFI spec requires `attributes` to point to a writable UINT64.
         unsafe {
             *attributes = a;
         }

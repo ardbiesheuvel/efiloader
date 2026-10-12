@@ -136,6 +136,8 @@ impl MemoryMap {
             .allocate(layout, self)
             .or(Err("Failed to allocate from pool"))?;
         db.allocations.insert(p.as_ptr(), (pool_type, layout));
+        // SAFETY: NonNull<u8> and NonNull<T> have the same layout, and the allocation was created
+        // with the size and alignment of `count` instances of T.
         unsafe { Ok(core::mem::transmute::<NonNull<u8>, NonNull<T>>(p)) }
     }
 
@@ -513,6 +515,9 @@ impl MemoryMap {
         self.convert_region(base, size, Some(EfiConventionalMemory), _type, 0)
             .ok()?;
 
+        // SAFETY: convert_region() succeeded, which means that the region was entirely covered by
+        // EfiConventionalMemory, i.e., memory that the embedder declared as available, and that
+        // it has now been assigned to the caller, until it is freed again via free_pages().
         unsafe {
             Some(slice::from_raw_parts_mut(
                 base as *mut MaybeUninit<u8>,
@@ -561,6 +566,9 @@ impl MemoryMap {
     pub(crate) fn box_new<T>(&self, memtype: EfiMemoryType, value: T) -> Result<PoolBox<T>, &str> {
         let mut p = self.allocate_pool::<T>(memtype, 1)?;
 
+        // SAFETY: `p` was allocated above with the size and alignment of T, and is not shared with
+        // anyone else yet. Note that the assignment drops the previous contents of `*p`, which are
+        // uninitialized, and so this is only sound for types T that have no drop glue.
         unsafe {
             *p.as_mut() = value;
         }
@@ -589,12 +597,17 @@ impl<T: ?Sized> Deref for PoolBox<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
+        // SAFETY: PoolBox instances are only created by box_new(), and own the initialized pool
+        // allocation they point to until they are dropped or taken.
         unsafe { self.0.unwrap().as_ref() }
     }
 }
 
 impl<T: ?Sized> DerefMut for PoolBox<T> {
     fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: PoolBox instances are only created by box_new(), and own the initialized pool
+        // allocation they point to until they are dropped or taken. Exclusive access is ensured by
+        // `&mut self`.
         unsafe { self.0.unwrap().as_mut() }
     }
 }

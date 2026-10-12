@@ -51,11 +51,15 @@ extern "efiapi" fn get_info<T>(
     rng_algorithm_list_size: *mut usize,
     rng_algorithm_list: *mut EfiRngAlgo,
 ) -> Status {
+    // SAFETY: The UEFI spec requires `rng_algorithm_list_size` to point to a valid UINTN.
     let len = unsafe { &mut *rng_algorithm_list_size };
     if *len < 2 {
         *len = 2;
         return Status::EFI_BUFFER_TOO_SMALL;
     }
+    // SAFETY: The UEFI spec requires `rng_algorithm_list` to be valid for writes of `*len` bytes.
+    // Note that this relies on `*len` covering two EFI_RNG_ALGORITHM GUIDs, but the check above
+    // treats it as a number of entries rather than a size in bytes.
     let guids = unsafe { slice::from_raw_parts_mut(rng_algorithm_list, 2) };
     guids[0] = RNG_ALGORITHM_DEFAULT;
     guids[1] = EFI_RNG_ALGORITHM_RAW;
@@ -69,7 +73,11 @@ extern "efiapi" fn get_rng<T>(
     rng_value_length: usize,
     rng_value: *mut u8,
 ) -> Status {
+    // SAFETY: The UEFI spec requires `rng_value` to be valid for writes of `rng_value_length`
+    // bytes.
     let output = unsafe { slice::from_raw_parts_mut(rng_value, rng_value_length) };
+    // SAFETY: `rng_algorithm` is only dereferenced if it is not NULL, in which case the UEFI spec
+    // requires it to point to a valid EFI_RNG_ALGORITHM GUID.
     let use_raw = !rng_algorithm.is_null()
         && match unsafe { *rng_algorithm } {
             RNG_ALGORITHM_DEFAULT => false,
