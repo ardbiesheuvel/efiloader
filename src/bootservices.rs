@@ -1150,6 +1150,9 @@ extern "efiapi" fn uninstall_multiple_protocol_interfaces(
 }
 
 extern "efiapi" fn calculate_crc32(data: *const (), datasize: usize, crc32: *mut u32) -> Status {
+    if data.is_null() || datasize == 0 || crc32.is_null() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
     let (crc, slice) = unsafe {
         (
             &mut *crc32,
