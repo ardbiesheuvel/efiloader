@@ -25,7 +25,7 @@ use core::mem::{size_of, MaybeUninit};
 use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ptr, slice};
-use crc::{Crc, CRC_32_CKSUM};
+use crc::{Crc, CRC_32_ISO_HDLC};
 
 const EFI_MEMORY_DESCRIPTOR_VERSION: u32 = 1;
 
@@ -1156,7 +1156,7 @@ extern "efiapi" fn calculate_crc32(data: *const (), datasize: usize, crc32: *mut
             slice::from_raw_parts(data as *const u8, datasize),
         )
     };
-    *crc = Crc::<u32>::new(&CRC_32_CKSUM).checksum(slice);
+    *crc = Crc::<u32>::new(&CRC_32_ISO_HDLC).checksum(slice);
     Status::EFI_SUCCESS
 }
 
