@@ -172,7 +172,7 @@ impl LoadedImageData {
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     fn start_image(
         image_handle: Handle,
         system_table: *const SystemTable,

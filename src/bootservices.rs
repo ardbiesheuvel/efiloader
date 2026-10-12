@@ -739,9 +739,11 @@ impl FileLoader for LoadImageFileLoader {
         let dst = loadbuffer as *mut u8;
         let src = self.source_buffer as *const u8;
         let len = size.min(self.source_size - offset);
-        ptr::copy(src.offset(offset as isize), dst, len);
-        if len < size {
-            ptr::write_bytes(dst.offset(len as isize), 0, size - len);
+        unsafe {
+            ptr::copy(src.offset(offset as isize), dst, len);
+            if len < size {
+                ptr::write_bytes(dst.offset(len as isize), 0, size - len);
+            }
         }
         Ok(())
     }
@@ -1029,7 +1031,7 @@ core::arch::global_asm!(include_str!("multiprotocol_aarch64.s"));
 #[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(include_str!("multiprotocol_x86_64.s"));
 
-extern "efiapi" {
+unsafe extern "efiapi" {
     fn install_multiple_protocol_interfaces_wrapper(handle: *mut Handle) -> Status;
     fn uninstall_multiple_protocol_interfaces_wrapper(handle: Handle) -> Status;
 }
@@ -1037,13 +1039,15 @@ extern "efiapi" {
 unsafe fn parse_multiproto_varargs(p: *const *const ()) -> Option<BTreeMap<Guid, *const ()>> {
     let mut m: BTreeMap<Guid, *const ()> = BTreeMap::new();
     let mut p = p;
-    while !(*p).is_null() {
-        let g = &*(*p as *const Guid);
-        if m.insert(*g, *p.offset(1)).is_some() {
-            // Cannot install the same protocol twice
-            return None;
+    unsafe {
+        while !(*p).is_null() {
+            let g = &*(*p as *const Guid);
+            if m.insert(*g, *p.offset(1)).is_some() {
+                // Cannot install the same protocol twice
+                return None;
+            }
+            p = p.offset(2);
         }
-        p = p.offset(2);
     }
     if m.len() == 0 {
         None
@@ -1052,7 +1056,7 @@ unsafe fn parse_multiproto_varargs(p: *const *const ()) -> Option<BTreeMap<Guid,
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "efiapi" fn install_multiple_protocol_interfaces(
     handle: *mut Handle,
     p: *const *const (),
@@ -1114,7 +1118,7 @@ extern "efiapi" fn install_multiple_protocol_interfaces(
     Status::EFI_SUCCESS
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "efiapi" fn uninstall_multiple_protocol_interfaces(
     handle: Handle,
     p: *const *const (),

@@ -277,11 +277,11 @@ impl<'a> PeLoader<'a> {
         let (base, limit) = {
             let l = buf.len() as isize;
             let base = buf.as_mut_ptr() as *mut u8;
-            (base, base.offset(l))
+            (base, unsafe { base.offset(l) })
         };
 
-        let mut reloc = base.offset(tbl.rva as isize);
-        let reloc_end = reloc.offset(tbl.size as isize);
+        let mut reloc = unsafe { base.offset(tbl.rva as isize) };
+        let reloc_end = unsafe { reloc.offset(tbl.size as isize) };
 
         if reloc > limit || reloc_end > limit {
             return Err(());
@@ -289,24 +289,24 @@ impl<'a> PeLoader<'a> {
 
         while reloc < reloc_end {
             const BSIZE: usize = size_of::<BaseRelocationBlock>();
-            let block = &*(reloc as *const BaseRelocationBlock);
-            reloc = reloc.offset(BSIZE as isize);
+            let block = unsafe { &*(reloc as *const BaseRelocationBlock) };
+            reloc = unsafe { reloc.offset(BSIZE as isize) };
             if reloc > reloc_end || (block.size as usize) < BSIZE {
                 return Err(());
             }
 
             let block_size = block.size as usize - BSIZE;
             let block_len = block_size / size_of::<u16>();
-            let entries: &[u16] = slice::from_raw_parts(reloc as _, block_len);
-            reloc = reloc.offset(block_size as isize);
+            let entries: &[u16] = unsafe { slice::from_raw_parts(reloc as _, block_len) };
+            reloc = unsafe { reloc.offset(block_size as isize) };
             if reloc > reloc_end {
                 return Err(());
             }
 
             for e in entries {
                 let offset = block.rva + (*e as u32 % 0x1000);
-                let p = base.offset(offset as isize);
-                if p.offset(size_of::<u64>() as isize) > limit {
+                let p = unsafe { base.offset(offset as isize) };
+                if unsafe { p.offset(size_of::<u64>() as isize) } > limit {
                     return Err(());
                 }
 
@@ -316,9 +316,12 @@ impl<'a> PeLoader<'a> {
                     IMAGE_REL_BASED_ABSOLUTE => (),
                     IMAGE_REL_BASED_DIR64 => {
                         let p = p as *mut u64;
-                        p.write_unaligned(
-                            p.read_unaligned() - self.pe_header.image_base + base as u64,
-                        );
+
+                        unsafe {
+                            p.write_unaligned(
+                                p.read_unaligned() - self.pe_header.image_base + base as u64,
+                            );
+                        }
                     }
                     _ => {
                         return Err(());
