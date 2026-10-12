@@ -22,6 +22,7 @@ start_image:
 	str	x29, [x19]	// store current SP in loadedimage protocol
 	mov	sp, x4
 	blr	x2
+	mov	sp, x29		// switch back to our own stack
 	str	xzr, [x19]	// wipe recorded SP value
 
 0:	ldp	x19, x20, [sp, #16]

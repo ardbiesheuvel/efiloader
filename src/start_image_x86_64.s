@@ -26,6 +26,7 @@ start_image:
 	mov	rdx, rsi
 	lea	rsp, [r8 - 0x20]
 	call	rbp
+	mov	rsp, [rbx]	// switch back to our own stack
 
 	xor	ecx, ecx
 	mov	[rbx], rcx 	// wipe recorded SP value
