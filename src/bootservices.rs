@@ -299,9 +299,13 @@ extern "efiapi" fn allocate_pages(
     pages: usize,
     memory: *mut PhysicalAddress,
 ) -> Status {
-    // SAFETY: The UEFI spec requires `memory` to point to a valid EFI_PHYSICAL_ADDRESS, which
-    // serves as an input for AllocateMaxAddress and AllocateAddress allocations, and receives the
-    // address of the allocated pages.
+    if memory.is_null() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
+    // SAFETY: `memory` is not NULL, and the UEFI spec requires it to point to a valid
+    // EFI_PHYSICAL_ADDRESS, which serves as an input for AllocateMaxAddress and AllocateAddress
+    // allocations, and receives the address of the allocated pages.
     let m = unsafe { &mut *memory };
 
     let placement: Placement = match _type {
@@ -802,6 +806,9 @@ extern "efiapi" fn load_image(
     image_handle: *mut Handle,
 ) -> Status {
     log::trace!("LoadImage()");
+    if image_handle.is_null() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
     if source_buffer.is_null() || source_size == 0 {
         return Status::EFI_UNSUPPORTED;
     }
@@ -812,7 +819,8 @@ extern "efiapi" fn load_image(
     };
 
     if let Some(li) = EFI.load_image(&ldr) {
-        // SAFETY: The UEFI spec requires `image_handle` to point to a writable EFI_HANDLE.
+        // SAFETY: `image_handle` is not NULL, and the UEFI spec requires it to point to a writable
+        // EFI_HANDLE.
         unsafe {
             *image_handle = li.image_handle;
         }

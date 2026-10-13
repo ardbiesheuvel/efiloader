@@ -25,6 +25,17 @@ type GetMemoryAttributes =
 type SetClearMemoryAttributes =
     extern "efiapi" fn(*mut EfiMemoryAttribute, PhysicalAddress, u64, u64) -> Status;
 
+/// Returns the range described by `base_address` and `length`, if it is non-empty and does not
+/// wrap around.
+fn to_range(base_address: PhysicalAddress, length: u64) -> Option<Range<usize>> {
+    let start = base_address as usize;
+    let end = start.checked_add(length as usize)?;
+    if start == end {
+        return None;
+    }
+    Some(start..end)
+}
+
 extern "efiapi" fn get_memory_attributes(
     _this: *mut EfiMemoryAttribute,
     base_address: PhysicalAddress,
@@ -33,11 +44,13 @@ extern "efiapi" fn get_memory_attributes(
 ) -> Status {
     let mm = &EFI.mapper;
 
-    let start = base_address as usize;
-    let end = start + length as usize;
+    let Some(range) = to_range(base_address, length).filter(|_| !attributes.is_null()) else {
+        return Status::EFI_INVALID_PARAMETER;
+    };
 
-    if let Some(a) = mm.query_range(&(start..end)) {
-        // SAFETY: The UEFI spec requires `attributes` to point to a writable UINT64.
+    if let Some(a) = mm.query_range(&range) {
+        // SAFETY: `attributes` is not NULL, and the UEFI spec requires it to point to a writable
+        // UINT64.
         unsafe {
             *attributes = a;
         }
@@ -55,10 +68,11 @@ extern "efiapi" fn set_memory_attributes(
 ) -> Status {
     let mm = &EFI.mapper;
 
-    let start = base_address as usize;
-    let end = start + length as usize;
+    let Some(range) = to_range(base_address, length) else {
+        return Status::EFI_INVALID_PARAMETER;
+    };
 
-    if let Ok(_) = mm.remap_range(&(start..end), attributes, 0) {
+    if let Ok(_) = mm.remap_range(&range, attributes, 0) {
         Status::EFI_SUCCESS
     } else {
         Status::EFI_UNSUPPORTED
@@ -73,10 +87,11 @@ extern "efiapi" fn clear_memory_attributes(
 ) -> Status {
     let mm = &EFI.mapper;
 
-    let start = base_address as usize;
-    let end = start + length as usize;
+    let Some(range) = to_range(base_address, length) else {
+        return Status::EFI_INVALID_PARAMETER;
+    };
 
-    if let Ok(_) = mm.remap_range(&(start..end), 0, attributes) {
+    if let Ok(_) = mm.remap_range(&range, 0, attributes) {
         Status::EFI_SUCCESS
     } else {
         Status::EFI_UNSUPPORTED

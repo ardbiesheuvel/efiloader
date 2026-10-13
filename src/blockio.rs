@@ -117,9 +117,13 @@ extern "efiapi" fn read_blocks(
     buffer: *mut (),
 ) -> Status {
     log::trace!("Calling read_blocks");
-    // SAFETY: The UEFI spec requires `this` to point to the protocol instance that this function was
-    // called through, which is an EfiBlockIoProtocol instance in the protocol database, given that
-    // this function is not exposed in any other way.
+    if this.is_null() || buffer.is_null() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
+    // SAFETY: `this` is not NULL, and the UEFI spec requires it to point to the protocol instance
+    // that this function was called through, which is an EfiBlockIoProtocol instance in the
+    // protocol database, given that this function is not exposed in any other way.
     let this = unsafe { &mut *this };
     if media_id != this._media.media_id {
         return Status::EFI_MEDIA_CHANGED;
@@ -131,7 +135,8 @@ extern "efiapi" fn read_blocks(
         return Status::EFI_BAD_BUFFER_SIZE;
     }
 
-    // SAFETY: The UEFI spec requires `buffer` to be valid for writes of `buffer_size` bytes.
+    // SAFETY: `buffer` is not NULL, and the UEFI spec requires it to be valid for writes of
+    // `buffer_size` bytes.
     let ret = if let Ok(_) = unsafe {
         this.loader.load_range(
             buffer,

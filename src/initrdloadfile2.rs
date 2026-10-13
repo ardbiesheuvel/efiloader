@@ -66,19 +66,20 @@ extern "efiapi" fn load_file(
         return Status::EFI_UNSUPPORTED;
     }
 
-    if buffer_size.is_null() {
+    if this.is_null() || file_path.is_null() || buffer_size.is_null() {
         return Status::EFI_INVALID_PARAMETER;
     }
 
-    // SAFETY: The UEFI spec requires `file_path` to point to a valid device path.
+    // SAFETY: `file_path` is not NULL, and the UEFI spec requires it to point to a valid device
+    // path.
     let file_path = unsafe { &*file_path };
     if file_path._type != EFI_DEV_END_PATH {
         return Status::EFI_NOT_FOUND;
     }
 
-    // SAFETY: The UEFI spec requires `this` to point to the protocol instance that this function was
-    // called through, which is the EfiLoadFile2 instance installed by install(), given that this
-    // function is not exposed in any other way.
+    // SAFETY: `this` is not NULL, and the UEFI spec requires it to point to the protocol instance
+    // that this function was called through, which is the EfiLoadFile2 instance installed by
+    // install(), given that this function is not exposed in any other way.
     let this = unsafe { &mut *this };
     let filesize = this.loader.get_size();
 
