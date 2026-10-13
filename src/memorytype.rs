@@ -42,6 +42,36 @@ pub enum EfiMemoryType {
     EfiUnacceptedMemory,
 }
 
+/// Converts a raw EFI_MEMORY_TYPE value, e.g., one passed by an EFI image, into an EfiMemoryType.
+/// Values that do not correspond to a memory type defined by the UEFI specification (including
+/// the ranges reserved for OEM and OS use) are returned as the error.
+impl TryFrom<u32> for EfiMemoryType {
+    type Error = u32;
+
+    fn try_from(value: u32) -> Result<Self, u32> {
+        use EfiMemoryType::*;
+        Ok(match value {
+            0 => EfiReservedEfiMemoryType,
+            1 => EfiLoaderCode,
+            2 => EfiLoaderData,
+            3 => EfiBootServicesCode,
+            4 => EfiBootServicesData,
+            5 => EfiRuntimeServicesCode,
+            6 => EfiRuntimeServicesData,
+            7 => EfiConventionalMemory,
+            8 => EfiUnusableMemory,
+            9 => EfiACPIReclaimMemory,
+            10 => EfiACPIMemoryNVS,
+            11 => EfiMemoryMappedIO,
+            12 => EfiMemoryMappedIOPortSpace,
+            13 => EfiPalCode,
+            14 => EfiPersistentMemory,
+            15 => EfiUnacceptedMemory,
+            _ => return Err(value),
+        })
+    }
+}
+
 /// EFI_MEMORY_DESCRIPTOR - refer to the UEFI specification for details
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
