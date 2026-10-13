@@ -74,6 +74,9 @@ impl EfiBlockIoProtocol {
         if size % Self::BSIZE != 0 {
             return Err("File is not aligned to sector size");
         }
+        if size == 0 {
+            return Err("File is empty");
+        }
         let mut m = Box::new(EfiBlockIoMedia {
             media_id: 42,
             removable_media: 0,
@@ -83,7 +86,7 @@ impl EfiBlockIoProtocol {
             write_caching: 0,
             block_size: Self::BSIZE as u32,
             io_align: Self::BSIZE as u32,
-            last_block: (size / Self::BSIZE) as u64,
+            last_block: (size / Self::BSIZE - 1) as u64,
         });
         Ok(EfiBlockIoProtocol {
             revision: EFI_BLOCK_IO_PROTOCOL_REVISION,
@@ -124,15 +127,17 @@ extern "efiapi" fn read_blocks(
     // SAFETY: `this` is not NULL, and the UEFI spec requires it to point to the protocol instance
     // that this function was called through, which is an EfiBlockIoProtocol instance in the
     // protocol database, given that this function is not exposed in any other way.
-    let this = unsafe { &mut *this };
+    let this = unsafe { &*this };
     if media_id != this._media.media_id {
         return Status::EFI_MEDIA_CHANGED;
     }
-    if lba > this._media.last_block {
-        return Status::EFI_INVALID_PARAMETER;
-    }
     if buffer_size % EfiBlockIoProtocol::BSIZE != 0 {
         return Status::EFI_BAD_BUFFER_SIZE;
+    }
+    // All blocks that are being read must exist
+    let blocks = (buffer_size / EfiBlockIoProtocol::BSIZE) as u64;
+    if lba > this._media.last_block || blocks > this._media.last_block - lba + 1 {
+        return Status::EFI_INVALID_PARAMETER;
     }
 
     // SAFETY: `buffer` is not NULL, and the UEFI spec requires it to be valid for writes of
