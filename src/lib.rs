@@ -263,7 +263,40 @@ pub trait EfiProtocol {
     fn guid(&self) -> &Guid;
 }
 
-pub(crate) type ProtocolDb = BTreeMap<(Handle, Guid), Pin<Box<dyn EfiProtocol + Send>>>;
+/// The party that installed an entry into the protocol database. Entries may only be uninstalled
+/// or replaced by the party that installed them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProtocolOwner {
+    /// Installed by the EFI runtime itself. The runtime may retain pointers to these protocol
+    /// instances (e.g., the console protocols referenced by the system table, or the loaded image
+    /// protocols), and so they are never uninstalled.
+    Runtime,
+    /// Installed by the embedder via [`EfiContext::install_protocol`].
+    Embedder,
+    /// Installed by an EFI image via the boot services.
+    Image,
+}
+
+pub(crate) struct ProtocolEntry {
+    pub(crate) owner: ProtocolOwner,
+    protocol: Pin<Box<dyn EfiProtocol + Send>>,
+}
+
+impl ProtocolEntry {
+    pub(crate) fn new(owner: ProtocolOwner, protocol: Pin<Box<dyn EfiProtocol + Send>>) -> Self {
+        ProtocolEntry { owner, protocol }
+    }
+}
+
+impl Deref for ProtocolEntry {
+    type Target = dyn EfiProtocol + Send;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.protocol
+    }
+}
+
+pub(crate) type ProtocolDb = BTreeMap<(Handle, Guid), ProtocolEntry>;
 
 pub struct EfiContext {
     cfgtable: ConfigTableDb,
@@ -359,10 +392,12 @@ pub fn init(
             st: RefCell::new(st),
         };
 
-        ctx.install_pinned_protocol(conhandle, inp);
-        ctx.install_pinned_protocol(conhandle, out);
-        ctx.install_protocol(None, EfiMemoryAttribute::new());
-        ctx.install_protocol(None, EfiRng::new());
+        ctx.install_pinned_protocol(conhandle, inp, ProtocolOwner::Runtime)?;
+        ctx.install_pinned_protocol(conhandle, out, ProtocolOwner::Runtime)?;
+        let memattr = Box::pin(EfiMemoryAttribute::new());
+        ctx.install_pinned_protocol(new_handle(), memattr, ProtocolOwner::Runtime)?;
+        let rng = Box::pin(EfiRng::new());
+        ctx.install_pinned_protocol(new_handle(), rng, ProtocolOwner::Runtime)?;
 
         let rtprop = ctx
             .memmap
@@ -386,31 +421,55 @@ pub fn init(
 }
 
 impl EfiContext {
+    /// Installs `protocol` onto `handle` on behalf of `owner`. Fails if `handle` already carries
+    /// a protocol with the same GUID: existing entries are never replaced, given that this would
+    /// free a protocol instance that may still be referenced.
     pub(crate) fn install_pinned_protocol<T: EfiProtocol + Send + 'static>(
         &self,
         handle: Handle,
         protocol: Pin<Box<T>>,
-    ) {
-        self.protocol_db
-            .borrow_mut()
-            .insert((handle, *protocol.guid()), protocol);
+        owner: ProtocolOwner,
+    ) -> Result<(), ()> {
+        let mut db = self.protocol_db.borrow_mut();
+        let key = (handle, *protocol.guid());
+        if db.contains_key(&key) {
+            return Err(());
+        }
+        db.insert(key, ProtocolEntry::new(owner, protocol));
+        Ok(())
     }
 
     /// Install `protocol` onto `handle`; if `handle` is `None`, a new one will be allocated.
-    /// Returns the handle onto which the protocol was installed.
+    /// Returns the handle onto which the protocol was installed, or an error if `handle` already
+    /// carries a protocol with the same GUID.
     pub fn install_protocol<T: EfiProtocol + Send + 'static>(
         &self,
         handle: Option<Handle>,
         protocol: T,
-    ) -> Handle {
+    ) -> Result<Handle, ()> {
         let handle = handle.unwrap_or_else(|| new_handle());
-        self.install_pinned_protocol(handle, Box::pin(protocol));
-        handle
+        self.install_pinned_protocol(handle, Box::pin(protocol), ProtocolOwner::Embedder)?;
+        Ok(handle)
     }
 
-    /// Uninstalls the protocol identified by `guid` from `handle`.
-    pub fn uninstall_protocol<T>(&self, handle: Handle, guid: &Guid, _protocol: &T) {
-        self.protocol_db.borrow_mut().remove(&(handle, *guid));
+    /// Uninstalls the protocol identified by `guid` from `handle`. Only protocols that were
+    /// installed via [`install_protocol`](Self::install_protocol) can be uninstalled, and an error
+    /// is returned if no such protocol is found.
+    pub fn uninstall_protocol<T>(
+        &self,
+        handle: Handle,
+        guid: &Guid,
+        _protocol: &T,
+    ) -> Result<(), ()> {
+        let mut db = self.protocol_db.borrow_mut();
+        let key = (handle, *guid);
+        match db.get(&key) {
+            Some(e) if e.owner == ProtocolOwner::Embedder => {
+                db.remove(&key);
+                Ok(())
+            }
+            _ => Err(()),
+        }
     }
 
     /// Installs a EFI configuration table identified by `guid`. If `table` is a raw NULL pointer,
@@ -452,13 +511,7 @@ impl EfiContext {
 
         let pe_image = pe_ldr.load(EfiLoaderCode, placement, &*self.mapper)?;
 
-        Some(LoadedImageData::new(
-            &self,
-            &pe_image,
-            EfiLoaderCode,
-            EfiLoaderData,
-            randomized,
-        ))
+        LoadedImageData::new(&self, &pe_image, EfiLoaderCode, EfiLoaderData, randomized)
     }
 
     /// Override the Get/SetTime EFI runtime services by local implementations.

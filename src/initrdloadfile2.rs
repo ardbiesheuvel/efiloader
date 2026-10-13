@@ -9,6 +9,7 @@ use crate::EfiContext;
 use crate::EfiProtocol;
 use crate::FileLoader;
 use crate::{guid, Guid};
+use crate::{new_handle, ProtocolOwner};
 use crate::{status::*, Bool};
 
 use alloc::boxed::Box;
@@ -112,23 +113,23 @@ pub(crate) fn install(ctx: &EfiContext, loader: impl FileLoader + Send + 'static
         load_file,
         loader: Box::new(loader),
     };
-    let handle = ctx.install_protocol(None, lf);
-    ctx.install_protocol(
-        Some(handle),
-        InitrdDevicePath {
-            vendor: VendorMedia {
-                header: DevicePath {
-                    _type: DevicePathType::EFI_DEV_MEDIA,
-                    subtype: DevicePathSubtype::EFI_DEV_MEDIA_VENDOR,
-                    size: size_of::<VendorMedia>() as u16,
-                },
-                vendor_guid: LINUX_EFI_INITRD_MEDIA_GUID,
+    let dp = InitrdDevicePath {
+        vendor: VendorMedia {
+            header: DevicePath {
+                _type: DevicePathType::EFI_DEV_MEDIA,
+                subtype: DevicePathSubtype::EFI_DEV_MEDIA_VENDOR,
+                size: size_of::<VendorMedia>() as u16,
             },
-            end: DevicePath {
-                _type: DevicePathType::EFI_DEV_END_PATH,
-                subtype: DevicePathSubtype::EFI_DEV_END_ENTIRE,
-                size: size_of::<DevicePath>() as u16,
-            },
+            vendor_guid: LINUX_EFI_INITRD_MEDIA_GUID,
         },
-    );
+        end: DevicePath {
+            _type: DevicePathType::EFI_DEV_END_PATH,
+            subtype: DevicePathSubtype::EFI_DEV_END_ENTIRE,
+            size: size_of::<DevicePath>() as u16,
+        },
+    };
+    // Installing the protocols cannot fail, given that the handle is new
+    let handle = new_handle();
+    let _ = ctx.install_pinned_protocol(handle, Box::pin(lf), ProtocolOwner::Runtime);
+    let _ = ctx.install_pinned_protocol(handle, Box::pin(dp), ProtocolOwner::Runtime);
 }

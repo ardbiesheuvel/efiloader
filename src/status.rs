@@ -26,6 +26,7 @@ impl Status {
     pub const EFI_OUT_OF_RESOURCES: Status = Status(9 + EFI_ERROR_BASE);
     pub const EFI_MEDIA_CHANGED: Status = Status(13 + EFI_ERROR_BASE);
     pub const EFI_NOT_FOUND: Status = Status(14 + EFI_ERROR_BASE);
+    pub const EFI_ACCESS_DENIED: Status = Status(15 + EFI_ERROR_BASE);
     pub const EFI_NO_MAPPING: Status = Status(17 + EFI_ERROR_BASE);
     pub const EFI_TIMEOUT: Status = Status(18 + EFI_ERROR_BASE);
     pub const EFI_ABORTED: Status = Status(21 + EFI_ERROR_BASE);
@@ -47,6 +48,7 @@ impl fmt::Debug for Status {
             Status::EFI_OUT_OF_RESOURCES => "EFI_OUT_OF_RESOURCES",
             Status::EFI_MEDIA_CHANGED => "EFI_MEDIA_CHANGED",
             Status::EFI_NOT_FOUND => "EFI_NOT_FOUND",
+            Status::EFI_ACCESS_DENIED => "EFI_ACCESS_DENIED",
             Status::EFI_NO_MAPPING => "EFI_NO_MAPPING",
             Status::EFI_TIMEOUT => "EFI_TIMEOUT",
             Status::EFI_ABORTED => "EFI_ABORTED",

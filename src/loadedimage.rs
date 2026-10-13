@@ -8,6 +8,7 @@ use crate::new_handle;
 use crate::EfiContext;
 use crate::EfiProtocol;
 use crate::PeImage;
+use crate::ProtocolOwner;
 use crate::{memorytype::*, status::*, systemtable::*, Guid, Handle};
 
 use alloc::boxed::Box;
@@ -99,7 +100,7 @@ impl LoadedImageData {
         code_type: EfiMemoryType,
         data_type: EfiMemoryType,
         randomized: bool,
-    ) -> LoadedImageData {
+    ) -> Option<LoadedImageData> {
         let handle: Handle = new_handle();
         let li = Box::new(EfiLoadedImage {
             revision: EFI_LOADED_IMAGE_PROTOCOL_REVISION,
@@ -122,16 +123,22 @@ impl LoadedImageData {
         });
         let p = &*li as *const _;
 
-        ctx.install_pinned_protocol(handle, Box::into_pin(li));
+        ctx.install_pinned_protocol(handle, Box::into_pin(li), ProtocolOwner::Runtime)
+            .ok()?;
         let lid = LoadedImageData {
             image_handle: handle,
             loaded_image: p as _,
             load_options: Vec::new(),
         };
         if randomized {
-            ctx.install_protocol(Some(handle), RandomizedImage {});
+            // This can only fail if the protocol is already installed on this handle
+            let _ = ctx.install_pinned_protocol(
+                handle,
+                Box::pin(RandomizedImage {}),
+                ProtocolOwner::Runtime,
+            );
         }
-        lid
+        Some(lid)
     }
 }
 

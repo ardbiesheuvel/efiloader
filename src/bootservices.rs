@@ -8,7 +8,7 @@ use crate::EfiProtocol;
 use crate::FileLoader;
 use crate::{memorytype::*, status::*, tableheader::*};
 use crate::{Bool, Char16, Event, EventNotify, Guid, Handle, PhysicalAddress, Tpl};
-use crate::{ProtocolDb, TPL_APPLICATION, UEFI_REVISION};
+use crate::{ProtocolDb, ProtocolEntry, ProtocolOwner, TPL_APPLICATION, UEFI_REVISION};
 
 use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
 use crate::loadedimage::{current_image, exit_image};
@@ -21,7 +21,6 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::mem::{size_of, MaybeUninit};
-use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ptr, slice};
 use crc::{Crc, CRC_32_ISO_HDLC};
@@ -496,6 +495,40 @@ impl EfiProtocol for ExternalEfiProtocol {
     }
 }
 
+impl ExternalEfiProtocol {
+    /// Returns a protocol database entry for `interface`, installed by an EFI image as an
+    /// instance of `protocol`.
+    fn entry(protocol: Guid, interface: *const ()) -> ProtocolEntry {
+        ProtocolEntry::new(
+            ProtocolOwner::Image,
+            Box::pin(ExternalEfiProtocol {
+                protocol,
+                interface,
+            }),
+        )
+    }
+}
+
+/// Returns whether `handle` exists, i.e., whether any protocols are installed on it.
+fn handle_exists(db: &ProtocolDb, handle: Handle) -> bool {
+    db.keys().any(|k| k.0 == handle)
+}
+
+/// Returns whether `interface` may be installed by an EFI image as a device path protocol
+/// instance: it must not be NULL, and it must not be an empty device path.
+///
+/// # Safety
+///
+/// `interface` must either be NULL or point to a device path.
+unsafe fn is_valid_device_path(interface: *const ()) -> bool {
+    !interface.is_null() && {
+        // SAFETY: `interface` is not NULL, and so the caller guarantees that it points to a
+        // device path.
+        let dp = unsafe { &*(interface as *const DevicePath) };
+        dp._type != DevicePathType::EFI_DEV_END_PATH
+    }
+}
+
 extern "efiapi" fn install_protocol_interface(
     handle: *mut Handle,
     protocol: *const Guid,
@@ -509,32 +542,24 @@ extern "efiapi" fn install_protocol_interface(
     // SAFETY: Both pointers were checked for NULL above, and the UEFI spec requires them to point to
     // a valid EFI_HANDLE and EFI_GUID, respectively.
     let (handle, protocol) = unsafe { (&mut *handle, &*protocol) };
-    if *protocol == EFI_DEVICE_PATH_PROTOCOL_GUID {
-        if interface.is_null() {
-            return Status::EFI_INVALID_PARAMETER;
-        }
-        // SAFETY: `interface` is not NULL, and is being installed as a device path protocol
-        // instance, and so it must point to a device path.
-        let dp = unsafe { &*(interface as *const DevicePath) };
-        if dp._type == DevicePathType::EFI_DEV_END_PATH {
-            return Status::EFI_INVALID_PARAMETER;
-        }
-    }
-
-    let mut db = EFI.protocol_db.borrow_mut();
-    if *handle != 0 && db.contains_key(&(*handle, *protocol)) {
+    // SAFETY: The UEFI spec requires device path protocol interfaces to point to a device path.
+    if *protocol == EFI_DEVICE_PATH_PROTOCOL_GUID && !unsafe { is_valid_device_path(interface) } {
         return Status::EFI_INVALID_PARAMETER;
     }
 
-    let p = ExternalEfiProtocol {
-        protocol: *protocol,
-        interface: interface,
-    };
+    let mut db = EFI.protocol_db.borrow_mut();
+    // A handle that is passed in must exist, and must not carry this protocol already
+    if *handle != 0 && (!handle_exists(&db, *handle) || db.contains_key(&(*handle, *protocol))) {
+        return Status::EFI_INVALID_PARAMETER;
+    }
 
     if *handle == 0 {
         *handle = new_handle();
     }
-    db.insert((*handle, *protocol), Box::pin(p));
+    db.insert(
+        (*handle, *protocol),
+        ExternalEfiProtocol::entry(*protocol, interface),
+    );
     Status::EFI_SUCCESS
 }
 
@@ -550,19 +575,18 @@ extern "efiapi" fn uninstall_protocol_interface(
     // SAFETY: `protocol` is not NULL, and the UEFI spec requires it to point to a valid EFI_GUID.
     let protocol = unsafe { &*protocol };
 
-    let mut found = false;
-    EFI.protocol_db.borrow_mut().retain(
-        |k: &(Handle, Guid), v: &mut Pin<Box<dyn EfiProtocol + Send>>| {
-            let f = k.0 == handle && k.1 == *protocol && v.as_proto_ptr() == interface;
-            found |= f;
-            !f
-        },
-    );
-
-    if found {
-        Status::EFI_SUCCESS
-    } else {
-        Status::EFI_NOT_FOUND
+    let mut db = EFI.protocol_db.borrow_mut();
+    let key = (handle, *protocol);
+    match db.get(&key) {
+        Some(e) if e.as_proto_ptr() == interface => {
+            // Protocols installed by the runtime or the embedder cannot be uninstalled by images
+            if e.owner != ProtocolOwner::Image {
+                return Status::EFI_ACCESS_DENIED;
+            }
+            db.remove(&key);
+            Status::EFI_SUCCESS
+        }
+        _ => Status::EFI_NOT_FOUND,
     }
 }
 
@@ -578,27 +602,24 @@ extern "efiapi" fn reinstall_protocol_interface(
 
     // SAFETY: `protocol` is not NULL, and the UEFI spec requires it to point to a valid EFI_GUID.
     let protocol = unsafe { &*protocol };
+    // SAFETY: The UEFI spec requires device path protocol interfaces to point to a device path.
+    if *protocol == EFI_DEVICE_PATH_PROTOCOL_GUID && !unsafe { is_valid_device_path(new_interface) }
+    {
+        return Status::EFI_INVALID_PARAMETER;
+    }
 
     let mut db = EFI.protocol_db.borrow_mut();
-    let mut found = false;
-    db.retain(
-        |k: &(Handle, Guid), v: &mut Pin<Box<dyn EfiProtocol + Send>>| {
-            let f = k.0 == handle && k.1 == *protocol && v.as_proto_ptr() == old_interface;
-            found |= f;
-            !f
-        },
-    );
-
-    if found {
-        let p = ExternalEfiProtocol {
-            protocol: *protocol,
-            interface: new_interface,
-        };
-
-        db.insert((handle, *protocol), Box::pin(p));
-        Status::EFI_SUCCESS
-    } else {
-        Status::EFI_NOT_FOUND
+    let key = (handle, *protocol);
+    match db.get(&key) {
+        Some(e) if e.as_proto_ptr() == old_interface => {
+            // Protocols installed by the runtime or the embedder cannot be replaced by images
+            if e.owner != ProtocolOwner::Image {
+                return Status::EFI_ACCESS_DENIED;
+            }
+            db.insert(key, ExternalEfiProtocol::entry(*protocol, new_interface));
+            Status::EFI_SUCCESS
+        }
+        _ => Status::EFI_NOT_FOUND,
     }
 }
 
@@ -711,7 +732,7 @@ extern "efiapi" fn locate_handle(
 }
 
 fn compare_device_path(
-    entry: (&(usize, Guid), &Pin<Box<dyn EfiProtocol + Send>>),
+    entry: (&(Handle, Guid), &ProtocolEntry),
     protocol: &Guid,
     device_path: &DevicePath,
     db: &ProtocolDb,
@@ -720,15 +741,16 @@ fn compare_device_path(
     // and the requested protocol
     let guid = &entry.0 .1;
     let key = (entry.0 .0, *protocol);
-    if *guid != EFI_DEVICE_PATH_PROTOCOL_GUID || !db.contains_key(&key) {
+    let p = entry.1.as_proto_ptr();
+    if *guid != EFI_DEVICE_PATH_PROTOCOL_GUID || p.is_null() || !db.contains_key(&key) {
         return None;
     }
 
     // Check whether the provided device path is a prefix
     // of the device path in the protocol database
-    // SAFETY: `entry` is a device path protocol instance, and so its interface pointer points to a
-    // device path, which remains valid for as long as the protocol is installed.
-    let dp = unsafe { &*((*entry.1).as_proto_ptr() as *const DevicePath) };
+    // SAFETY: `entry` is a device path protocol instance, and so its non-NULL interface pointer
+    // points to a device path, which remains valid for as long as the protocol is installed.
+    let dp = unsafe { &*(p as *const DevicePath) };
     let bytes_equal = device_path.is_prefix_of(dp)?;
 
     // SAFETY: is_prefix_of() returns the combined size of the nodes of `device_path` that precede
@@ -757,11 +779,9 @@ extern "efiapi" fn locate_device_path(
     let db = EFI.protocol_db.borrow();
     let ret = if let Some(entry) = db
         .iter()
-        .filter_map(
-            |entry: (&(Handle, Guid), &Pin<Box<dyn EfiProtocol + Send>>)| {
-                compare_device_path(entry, protocol, devpath, &db)
-            },
-        )
+        .filter_map(|entry: (&(Handle, Guid), &ProtocolEntry)| {
+            compare_device_path(entry, protocol, devpath, &db)
+        })
         .max_by(|a, b| a.0.cmp(&b.0))
     {
         if !device.is_null() {
@@ -886,10 +906,10 @@ extern "efiapi" fn start_image(
     log::trace!("StartImage()");
     let db = EFI.protocol_db.borrow();
     let key = (handle, EFI_LOADED_IMAGE_PROTOCOL_GUID);
-    if let Some(proto) = db.get(&key) {
-        // SAFETY: Loaded image protocol instances are EfiLoadedImage instances installed by
-        // LoadedImageData::new(), which are pinned, and never uninstalled by this crate. This
-        // relies on EFI images not installing or uninstalling loaded image protocols themselves.
+    // Loaded image protocols installed by EFI images are not EfiLoadedImage instances
+    if let Some(proto) = db.get(&key).filter(|p| p.owner == ProtocolOwner::Runtime) {
+        // SAFETY: Loaded image protocol instances installed by the runtime are EfiLoadedImage
+        // instances installed by LoadedImageData::new(), which are pinned, and never uninstalled.
         let li = unsafe { &*(proto.as_proto_ptr() as *const EfiLoadedImage) };
         drop(db);
         let ret = li.start_image();
@@ -915,7 +935,7 @@ extern "efiapi" fn exit(
 
     let db = EFI.protocol_db.borrow();
     let key = (image_handle, EFI_LOADED_IMAGE_PROTOCOL_GUID);
-    if let Some(proto) = db.get(&key) {
+    if let Some(proto) = db.get(&key).filter(|p| p.owner == ProtocolOwner::Runtime) {
         // SAFETY: See start_image() regarding the validity of `li`.
         let li = unsafe { &*(proto.as_proto_ptr() as *const EfiLoadedImage) };
         // exit_image does not return, so we need to release
@@ -1140,7 +1160,7 @@ extern "efiapi" fn locate_protocol(
         .protocol_db
         .borrow()
         .iter()
-        .find(|e: &(&(usize, Guid), &Pin<Box<dyn EfiProtocol + Send>>)| e.0 .1 == protocol)
+        .find(|e: &(&(Handle, Guid), &ProtocolEntry)| e.0 .1 == protocol)
     {
         *interface = entry.1.as_proto_ptr();
         Status::EFI_SUCCESS
@@ -1217,16 +1237,14 @@ extern "efiapi" fn install_multiple_protocol_interfaces(
 
     // Check whether a device path protocol is being installed that already exists in the database
     if let Some(devpath) = protocols.get(&EFI_DEVICE_PATH_PROTOCOL_GUID) {
-        if devpath.is_null() {
+        // SAFETY: The UEFI spec requires device path protocol interfaces to point to a device
+        // path.
+        if !unsafe { is_valid_device_path(*devpath) } {
             return Status::EFI_INVALID_PARAMETER;
         }
 
-        // SAFETY: `devpath` is not NULL, and is being installed as a device path protocol
-        // instance, and so it must point to a device path.
+        // SAFETY: `devpath` was checked above to be a non-NULL pointer to a device path.
         let devpath = unsafe { &*(*devpath as *const DevicePath) };
-        if devpath._type == DevicePathType::EFI_DEV_END_PATH {
-            return Status::EFI_INVALID_PARAMETER;
-        }
 
         if let Some(_) = db.iter().find(|e| {
             let p = e.1.as_proto_ptr();
@@ -1241,8 +1259,12 @@ extern "efiapi" fn install_multiple_protocol_interfaces(
         }
     }
 
-    // If the handle is not NULL, check whether any of the protocols already exist on this handle
+    // If the handle is not NULL, check whether it exists, and whether any of the protocols already
+    // exist on this handle
     if *handle != 0 {
+        if !handle_exists(&db, *handle) {
+            return Status::EFI_INVALID_PARAMETER;
+        }
         for g in protocols.keys() {
             if db.contains_key(&(*handle, *g)) {
                 return Status::EFI_INVALID_PARAMETER;
@@ -1253,11 +1275,10 @@ extern "efiapi" fn install_multiple_protocol_interfaces(
     }
 
     for (guid, interface) in protocols.iter() {
-        let p = ExternalEfiProtocol {
-            protocol: *guid,
-            interface: *interface,
-        };
-        db.insert((*handle, *guid), Box::pin(p));
+        db.insert(
+            (*handle, *guid),
+            ExternalEfiProtocol::entry(*guid, *interface),
+        );
     }
     Status::EFI_SUCCESS
 }
@@ -1283,10 +1304,11 @@ extern "efiapi" fn uninstall_multiple_protocol_interfaces(
 
     let mut db = EFI.protocol_db.borrow_mut();
 
-    // Check whether all protocol/interface tuples are installed on the handle
+    // Check whether all protocol/interface tuples are installed on the handle, and whether they
+    // were installed by an EFI image (as opposed to the runtime or the embedder)
     for (guid, interface) in protocols.iter() {
         if let Some(p) = db.get(&(handle, *guid)) {
-            if p.as_proto_ptr() == *interface {
+            if p.as_proto_ptr() == *interface && p.owner == ProtocolOwner::Image {
                 continue;
             }
         }
