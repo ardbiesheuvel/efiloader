@@ -526,7 +526,13 @@ impl MemoryMap {
         }
     }
 
-    pub(crate) fn get_memory_map(&self, tbl: &mut [EfiMemoryDescriptor]) -> Option<(usize, usize)> {
+    /// Copies the memory map into `tbl`, and returns the map key and the number of descriptors.
+    /// Returns `None` if `tbl` is too small, in which case len() returns the number of descriptors
+    /// that it needs to be able to hold.
+    pub(crate) fn get_memory_map(
+        &self,
+        tbl: &mut [MaybeUninit<EfiMemoryDescriptor>],
+    ) -> Option<(usize, usize)> {
         let (mm, key) = {
             let mm = self.memmap.borrow();
             let key = self.mapkey.load(Ordering::Acquire);
@@ -546,13 +552,14 @@ impl MemoryMap {
             }
         };
 
-        let vec = mm.values().cloned().collect::<Vec<_>>();
-        if tbl.len() < vec.len() {
+        if tbl.len() < mm.len() {
             return None;
         }
 
-        tbl[..vec.len()].copy_from_slice(vec.as_slice());
-        Some((key, vec.len()))
+        for (d, s) in tbl.iter_mut().zip(mm.values()) {
+            d.write(*s);
+        }
+        Some((key, mm.len()))
     }
 
     pub(crate) fn len(&self) -> usize {

@@ -345,36 +345,54 @@ extern "efiapi" fn get_memory_map(
     descriptor_version: *mut u32,
 ) -> Status {
     log::trace!("GetMemoryMap()");
+    if memory_map_size.is_null() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
     let desc_size = size_of::<EfiMemoryDescriptor>();
-    // SAFETY: The UEFI spec requires `descriptor_size` and `descriptor_version` to point to
-    // writable locations of the appropriate types.
-    unsafe {
-        *descriptor_size = desc_size;
-        *descriptor_version = EFI_MEMORY_DESCRIPTOR_VERSION;
+    if !descriptor_size.is_null() {
+        // SAFETY: `descriptor_size` is not NULL, and the UEFI spec requires it to point to a
+        // writable UINTN.
+        unsafe { *descriptor_size = desc_size };
+    }
+    if !descriptor_version.is_null() {
+        // SAFETY: `descriptor_version` is not NULL, and the UEFI spec requires it to point to a
+        // writable UINT32.
+        unsafe { *descriptor_version = EFI_MEMORY_DESCRIPTOR_VERSION };
     }
 
-    // SAFETY: The UEFI spec requires `memory_map_size` to point to a valid UINTN that holds the
-    // size of the buffer at `memory_map`, and receives the size of the memory map.
+    // SAFETY: `memory_map_size` is not NULL, and the UEFI spec requires it to point to a valid UINTN
+    // that holds the size of the buffer at `memory_map`, and receives the size of the memory map.
     let map_size = unsafe { &mut *memory_map_size };
-    if *map_size == 0 {
-        *map_size = EFI.memmap.len() * desc_size;
-        return Status::EFI_BUFFER_TOO_SMALL;
-    }
 
-    // SAFETY: The UEFI spec requires `memory_map` to point to a writable buffer of `*map_size`
-    // bytes, suitably aligned for EFI memory descriptors, which the caller does not access while
-    // this call is in progress.
-    let buffer = unsafe { &mut slice::from_raw_parts_mut(memory_map, *map_size / desc_size) };
+    let buffer: &mut [MaybeUninit<EfiMemoryDescriptor>] = if memory_map.is_null() {
+        &mut []
+    } else {
+        // SAFETY: `memory_map` is not NULL, and the UEFI spec requires it to point to a writable
+        // buffer of `*map_size` bytes, suitably aligned for EFI memory descriptors, which the
+        // caller does not access while this call is in progress. Its contents may be
+        // uninitialized, which is why it is accessed via MaybeUninit.
+        unsafe { slice::from_raw_parts_mut(memory_map as *mut _, *map_size / desc_size) }
+    };
 
     if let Some((key, len)) = EFI.memmap.get_memory_map(buffer) {
         *map_size = len * desc_size;
-        // SAFETY: The UEFI spec requires `map_key` to point to a writable UINTN.
-        unsafe {
-            *map_key = key;
+        if !map_key.is_null() {
+            // SAFETY: `map_key` is not NULL, and the UEFI spec requires it to point to a writable
+            // UINTN.
+            unsafe { *map_key = key };
         }
         Status::EFI_SUCCESS
     } else {
-        Status::EFI_BUFFER_TOO_SMALL
+        // Report the size of the buffer that is needed to hold the memory map
+        let size = EFI.memmap.len() * desc_size;
+        let ret = if memory_map.is_null() && *map_size >= size {
+            Status::EFI_INVALID_PARAMETER
+        } else {
+            Status::EFI_BUFFER_TOO_SMALL
+        };
+        *map_size = size;
+        ret
     }
 }
 
