@@ -9,8 +9,8 @@ use crate::Guid;
 use crate::PoolBox;
 use crate::EFI;
 use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 use core::slice;
 
@@ -59,7 +59,10 @@ impl Drop for ConfigurationTable {
 }
 
 pub(crate) struct ConfigTableDb {
-    db: RefCell<(BTreeMap<Guid, ConfigurationTable>, &'static mut [Tuple])>,
+    db: RefCell<(
+        BTreeMap<Guid, ConfigurationTable>,
+        &'static mut [MaybeUninit<Tuple>],
+    )>,
 }
 
 impl ConfigTableDb {
@@ -84,8 +87,9 @@ impl ConfigTableDb {
 
         let mut st = efi.st.borrow_mut();
         if slice.len() < map.len() {
-            if slice.len() > 0 {
-                efi.memmap.free_pool(slice.as_ptr() as *const u8).ok();
+            let old = core::mem::take(slice);
+            if !old.is_empty() {
+                efi.memmap.free_pool(old.as_ptr() as *const u8).ok();
             }
 
             // Allocate in powers of two, and at least 8 entries, so that this code runs only once
@@ -97,9 +101,9 @@ impl ConfigTableDb {
                 .unwrap();
 
             // SAFETY: `c` points to a pool allocation of `len` entries, which is owned by the config
-            // table database until it is replaced and freed above. Note that entries remain
-            // uninitialized until they are populated below, but only populated entries are read.
-            *slice = unsafe { slice::from_raw_parts_mut(c.as_ptr(), len) };
+            // table database until it is replaced and freed above. Its contents are uninitialized,
+            // which is why it is accessed via MaybeUninit.
+            *slice = unsafe { slice::from_raw_parts_mut(c.as_ptr() as *mut _, len) };
 
             st.configuration_table = slice.as_ptr() as *mut _;
 
@@ -113,11 +117,8 @@ impl ConfigTableDb {
             st.hdr.update_crc();
         }
 
-        slice[..map.len()].copy_from_slice(
-            map.values()
-                .map(|b| b.as_tuple())
-                .collect::<Vec<_>>()
-                .as_slice(),
-        );
+        for (entry, table) in slice.iter_mut().zip(map.values()) {
+            entry.write(table.as_tuple());
+        }
     }
 }

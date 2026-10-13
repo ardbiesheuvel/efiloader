@@ -571,14 +571,12 @@ impl MemoryMap {
     }
 
     pub(crate) fn box_new<T>(&self, memtype: EfiMemoryType, value: T) -> Result<PoolBox<T>, &str> {
-        let mut p = self.allocate_pool::<T>(memtype, 1)?;
+        let p = self.allocate_pool::<T>(memtype, 1)?;
 
         // SAFETY: `p` was allocated above with the size and alignment of T, and is not shared with
-        // anyone else yet. Note that the assignment drops the previous contents of `*p`, which are
-        // uninitialized, and so this is only sound for types T that have no drop glue.
-        unsafe {
-            *p.as_mut() = value;
-        }
+        // anyone else yet. Initializing it via a raw pointer write avoids creating a reference to
+        // the uninitialized allocation, and dropping its previous contents.
+        unsafe { p.as_ptr().write(value) };
         Ok(PoolBox(Some(p)))
     }
 }
