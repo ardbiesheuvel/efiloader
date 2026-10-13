@@ -140,6 +140,9 @@ type CalculateCrc32 = extern "efiapi" fn(*const (), usize, *mut u32) -> Status;
 type CopyMem = extern "efiapi" fn(*mut u8, *const u8, usize) -> *mut u8;
 type SetMem = extern "efiapi" fn(*mut u8, usize, u8) -> *mut u8;
 
+type CreateEventEx =
+    extern "efiapi" fn(u32, Tpl, Option<EventNotify>, *const (), *const Guid, *mut Event) -> Status;
+
 #[repr(C)]
 pub(crate) struct BootServices {
     pub(crate) hdr: TableHeader,
@@ -197,6 +200,8 @@ pub(crate) struct BootServices {
 
     copy_mem: CopyMem,
     set_mem: SetMem,
+
+    create_event_ex: CreateEventEx,
 }
 
 impl BootServices {
@@ -262,7 +267,8 @@ impl BootServices {
 
             copy_mem: copy_mem,
             set_mem: set_mem,
-            //create_event_ex: create_event_ex,
+
+            create_event_ex: create_event_ex,
         };
         bs.update_crc();
         bs
@@ -278,7 +284,7 @@ unsafe impl EfiTable for BootServices {
 }
 
 const _: () =
-    assert!(size_of::<BootServices>() == size_of::<TableHeader>() + 43 * size_of::<usize>());
+    assert!(size_of::<BootServices>() == size_of::<TableHeader>() + 44 * size_of::<usize>());
 
 static CURRENT_TPL: AtomicUsize = AtomicUsize::new(TPL_APPLICATION);
 
@@ -447,6 +453,18 @@ extern "efiapi" fn create_event(
     _notify_tpl: Tpl,
     _notify_function: Option<EventNotify>,
     _notify_context: *const (),
+    _event: *mut Event,
+) -> Status {
+    log::warn!("UNIMPLEMENTED");
+    Status::EFI_OUT_OF_RESOURCES
+}
+
+extern "efiapi" fn create_event_ex(
+    _type: u32,
+    _notify_tpl: Tpl,
+    _notify_function: Option<EventNotify>,
+    _notify_context: *const (),
+    _event_group: *const Guid,
     _event: *mut Event,
 ) -> Status {
     log::warn!("UNIMPLEMENTED");
