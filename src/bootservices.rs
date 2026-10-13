@@ -12,7 +12,7 @@ use crate::{ProtocolDb, TPL_APPLICATION, UEFI_REVISION};
 
 use crate::bootservices::AllocateType::*;
 use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
-use crate::loadedimage::exit_image;
+use crate::loadedimage::{current_image, exit_image};
 use crate::new_handle;
 use crate::EfiLoadedImage;
 use crate::EFI;
@@ -837,7 +837,7 @@ extern "efiapi" fn start_image(
         let li = unsafe { &*(proto.as_proto_ptr() as *const EfiLoadedImage) };
         drop(db);
         let ret = li.start_image();
-        // TODO ensure that we cannot start the same image twice
+        // TODO ensure that we cannot restart an image after it has exited
         ret
     } else {
         Status::EFI_INVALID_PARAMETER
@@ -851,22 +851,28 @@ extern "efiapi" fn exit(
     _exit_data: *const Char16,
 ) -> Status {
     log::trace!("Exit()");
+
+    // Only the image that is currently running may exit
+    if image_handle != current_image() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
     let db = EFI.protocol_db.borrow();
     let key = (image_handle, EFI_LOADED_IMAGE_PROTOCOL_GUID);
     if let Some(proto) = db.get(&key) {
-        // SAFETY: See start_image() regarding the validity of `li`. While the image is running,
-        // `li.reserved` holds the stack pointer that start_image() recorded before entering it,
-        // and exit_image() switches back to that stack and returns `exit_status` from
-        // start_image(). This relies on Exit() only being called for images that are running.
-        unsafe {
-            let li = &*(proto.as_proto_ptr() as *const EfiLoadedImage);
-            // exit_image does not return, so we need to release
-            // the db spinlock explicitly
-            drop(db);
-            if li.reserved != 0 {
-                let sp = li.reserved;
-                exit_image(exit_status, sp);
-            }
+        // SAFETY: See start_image() regarding the validity of `li`.
+        let li = unsafe { &*(proto.as_proto_ptr() as *const EfiLoadedImage) };
+        // exit_image does not return, so we need to release
+        // the db spinlock explicitly
+        drop(db);
+        // Clear the recorded stack pointer, as exit_image() bypasses the code in start_image()
+        // that does so when the image returns normally
+        let sp = li.reserved.replace(0);
+        if sp != 0 {
+            // SAFETY: `sp` is the stack pointer that start_image() recorded when it entered the
+            // image, which is the one that is currently running, as checked above. exit_image()
+            // switches back to that stack, and returns `exit_status` from start_image().
+            unsafe { exit_image(exit_status, sp) };
         }
     }
     Status::EFI_INVALID_PARAMETER

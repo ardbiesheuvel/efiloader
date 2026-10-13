@@ -12,7 +12,9 @@ use crate::{memorytype::*, status::*, systemtable::*, Guid, Handle};
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::ptr;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const EFI_LOADED_IMAGE_PROTOCOL_GUID: Guid = guid!(
     0x5B1B31A1,
@@ -30,6 +32,13 @@ pub const LINUX_EFI_LOADED_IMAGE_RAND_GUID: Guid = guid!(
 
 const EFI_LOADED_IMAGE_PROTOCOL_REVISION: u32 = 0x1000;
 
+/// The handle of the image that is currently running, or 0 if none is
+static CURRENT_IMAGE: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn current_image() -> Handle {
+    CURRENT_IMAGE.load(Ordering::Relaxed)
+}
+
 type ImageUnload = extern "efiapi" fn(Handle) -> Status;
 
 extern "efiapi" fn unload(_handle: Handle) -> Status {
@@ -43,7 +52,9 @@ pub struct EfiLoadedImage {
     system_table: *const SystemTable,
     device_handle: Handle,
     file_path: *const (), //DevicePath,
-    pub reserved: usize,
+    /// The stack pointer that start_image() recorded when entering the image, which Exit() uses
+    /// to return from it. This is 0 whenever the image is not running.
+    pub(crate) reserved: Cell<usize>,
     load_options_size: u32,
     load_options: *const (),
     image_base: *const (),
@@ -96,7 +107,7 @@ impl LoadedImageData {
             system_table: efi_system_table(),
             device_handle: 0,
             file_path: ptr::null(),
-            reserved: usize::MAX,
+            reserved: Cell::new(0),
             load_options_size: 0,
             load_options: ptr::null(),
             image_base: pe_image.image_base(),
@@ -139,6 +150,12 @@ impl EfiLoadedImage {
     pub fn start_image(&self) -> Status {
         const EFI_STACK_SIZE: usize = 128 * 1024;
 
+        // Starting an image that is already running would clobber the stack pointer that
+        // Exit() relies on to return from it
+        if self.reserved.get() != 0 {
+            return Status::EFI_INVALID_PARAMETER;
+        }
+
         let stack = {
             let s = self
                 .ctx
@@ -149,21 +166,24 @@ impl EfiLoadedImage {
             s.unwrap().as_ptr()
         };
 
+        let previous = CURRENT_IMAGE.swap(self.image_handle, Ordering::Relaxed);
         // SAFETY: `stack` points to a 16 byte aligned pool allocation of EFI_STACK_SIZE bytes, and
         // so offsetting it by EFI_STACK_SIZE produces a suitably aligned pointer to the top of the
         // stack. `entrypoint` points to the entry point of a PE/COFF image that was loaded and
         // relocated by PeLoader, which is called with the image handle and system table pointer as
         // arguments, as the UEFI spec requires. start_image() records the stack pointer in
-        // `reserved`, so that Exit() can return from start_image() via exit_image().
+        // `reserved`, so that Exit() can return from start_image() via exit_image(), and clears it
+        // again when the image returns.
         let ret = unsafe {
             start_image(
                 self.image_handle,
                 efi_system_table(),
                 self.entrypoint as _,
-                &self.reserved,
+                self.reserved.as_ptr(),
                 stack.offset(EFI_STACK_SIZE as isize),
             )
         };
+        CURRENT_IMAGE.store(previous, Ordering::Relaxed);
         self.ctx.free_pool(stack).ok();
         ret
     }
@@ -195,7 +215,7 @@ unsafe extern "C" {
         image_handle: Handle,
         system_table: *const SystemTable,
         entrypoint: *const (),
-        sp_buffer: *const usize,
+        sp_buffer: *mut usize,
         stack: *mut u8,
     ) -> Status;
 
