@@ -7,7 +7,8 @@ use crate::guid;
 use crate::*;
 use crate::{status::*, Guid};
 
-use core::slice;
+use core::mem::size_of_val;
+use core::{ptr, slice};
 
 pub const EFI_RNG_PROTOCOL_GUID: Guid = guid!(
     0x3152bca5,
@@ -35,6 +36,9 @@ const EFI_RNG_ALGORITHM_RAW: EfiRngAlgo = guid!(
     [0xb7, 0x84, 0x7f, 0xfd, 0xc4, 0xb6, 0x85, 0x61]
 );
 
+/// The algorithms reported by GetInfo()
+const RNG_ALGORITHMS: [EfiRngAlgo; 2] = [RNG_ALGORITHM_DEFAULT, EFI_RNG_ALGORITHM_RAW];
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct EfiRng {
@@ -51,19 +55,35 @@ extern "efiapi" fn get_info<T>(
     rng_algorithm_list_size: *mut usize,
     rng_algorithm_list: *mut EfiRngAlgo,
 ) -> Status {
-    // SAFETY: The UEFI spec requires `rng_algorithm_list_size` to point to a valid UINTN.
-    let len = unsafe { &mut *rng_algorithm_list_size };
-    if *len < 2 {
-        *len = 2;
+    if rng_algorithm_list_size.is_null() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
+    // SAFETY: `rng_algorithm_list_size` is not NULL, and the UEFI spec requires it to point to a
+    // valid UINTN.
+    let size = unsafe { &mut *rng_algorithm_list_size };
+
+    // The list size is in bytes, not in entries
+    let required = size_of_val(&RNG_ALGORITHMS);
+    if *size < required {
+        *size = required;
         return Status::EFI_BUFFER_TOO_SMALL;
     }
-    // SAFETY: The UEFI spec requires `rng_algorithm_list` to be valid for writes of `*len` bytes.
-    // Note that this relies on `*len` covering two EFI_RNG_ALGORITHM GUIDs, but the check above
-    // treats it as a number of entries rather than a size in bytes.
-    let guids = unsafe { slice::from_raw_parts_mut(rng_algorithm_list, 2) };
-    guids[0] = RNG_ALGORITHM_DEFAULT;
-    guids[1] = EFI_RNG_ALGORITHM_RAW;
-    *len = 2;
+    if rng_algorithm_list.is_null() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
+    // SAFETY: `rng_algorithm_list` is not NULL, and the UEFI spec requires it to be valid for writes
+    // of `*size` bytes, which is sufficient to hold RNG_ALGORITHMS. The copy is performed bytewise,
+    // and so it does not rely on the buffer being suitably aligned.
+    unsafe {
+        ptr::copy_nonoverlapping(
+            RNG_ALGORITHMS.as_ptr() as *const u8,
+            rng_algorithm_list as *mut u8,
+            required,
+        );
+    }
+    *size = required;
     Status::EFI_SUCCESS
 }
 
@@ -73,9 +93,17 @@ extern "efiapi" fn get_rng<T>(
     rng_value_length: usize,
     rng_value: *mut u8,
 ) -> Status {
-    // SAFETY: The UEFI spec requires `rng_value` to be valid for writes of `rng_value_length`
-    // bytes.
-    let output = unsafe { slice::from_raw_parts_mut(rng_value, rng_value_length) };
+    if rng_value.is_null() || rng_value_length == 0 {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
+    // SAFETY: `rng_value` is not NULL, and the UEFI spec requires it to be valid for writes of
+    // `rng_value_length` bytes. Its contents may be uninitialized, and so it is cleared before it
+    // is turned into a [u8] slice.
+    let output = unsafe {
+        ptr::write_bytes(rng_value, 0, rng_value_length);
+        slice::from_raw_parts_mut(rng_value, rng_value_length)
+    };
     // SAFETY: `rng_algorithm` is only dereferenced if it is not NULL, in which case the UEFI spec
     // requires it to point to a valid EFI_RNG_ALGORITHM GUID.
     let use_raw = !rng_algorithm.is_null()
