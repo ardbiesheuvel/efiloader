@@ -2,6 +2,7 @@
 // Copyright 2022-2023 Google LLC
 // Author: Ard Biesheuvel <ardb@google.com>
 
+use crate::configtable::ConfigurationTablePointer;
 use crate::memorytype::*;
 use crate::poolalloc::PoolAllocator;
 use crate::EfiMemoryType::*;
@@ -50,38 +51,15 @@ const EFI_MEMORY_ATTRIBUTES_TABLE_GUID: Guid = guid!(
     [0xa2, 0x20, 0x38, 0xb7, 0xdc, 0x46, 0x12, 0x20]
 );
 
-#[derive(Debug)]
+/// The EFI Memory Attributes Table, which is followed by `number_of_entries` entries of
+/// `descriptor_size` bytes each
 #[repr(C)]
-pub(crate) struct MemoryAttributesTable<const N: usize> {
+struct MemoryAttributesTable {
     version: u32,
     number_of_entries: u32,
     descriptor_size: u32,
     flags: u32,
-    entry: [EfiMemoryDescriptor; N],
-}
-
-impl<const N: usize> MemoryAttributesTable<N> {
-    pub fn new(descs: &[EfiMemoryDescriptor]) -> Self {
-        let mut s = MemoryAttributesTable {
-            version: 2,
-            number_of_entries: 0,
-            descriptor_size: core::mem::size_of::<EfiMemoryDescriptor>() as u32,
-            flags: 0 & EFI_MEMORY_ATTRIBUTES_FLAGS_RT_FORWARD_CONTROL_FLOW_GUARD,
-            entry: [EfiMemoryDescriptor::zeroed(); N],
-        };
-        s.update(descs);
-        s
-    }
-
-    pub fn update(&mut self, descs: &[EfiMemoryDescriptor]) {
-        if descs.len() > self.entry.len() {
-            return;
-        }
-        for (i, d) in descs.iter().enumerate() {
-            self.entry[i] = *d;
-        }
-        self.number_of_entries = descs.len() as u32;
-    }
+    entry: [EfiMemoryDescriptor; 0],
 }
 
 type MemMap = BTreeMap<PhysicalAddress, EfiMemoryDescriptor>;
@@ -237,16 +215,44 @@ impl MemoryMap {
         self.mapkey.fetch_add(1, Ordering::Release);
     }
 
-    fn get_memattr_table(&self, mm: &MemMap, mapkey: usize) -> Option<MemoryAttributesTable<8>> {
+    fn get_memattr_entries(&self, mm: &MemMap, mapkey: usize) -> Option<Vec<EfiMemoryDescriptor>> {
         if self.mem_attr_mapkey.swap(mapkey, Ordering::Acquire) == mapkey {
             return None;
         }
-        let vec = mm
-            .values()
-            .cloned()
-            .filter_map(|desc| desc.to_memattr_table_entry())
-            .collect::<Vec<_>>();
-        Some(MemoryAttributesTable::new(vec.as_slice()))
+        Some(
+            mm.values()
+                .filter_map(|desc| desc.to_memattr_table_entry())
+                .collect(),
+        )
+    }
+
+    /// Allocates a Memory Attributes Table describing `entries` from the EfiACPIReclaimMemory
+    /// pool.
+    fn new_memattr_table(
+        &self,
+        entries: &[EfiMemoryDescriptor],
+    ) -> Result<ConfigurationTablePointer, &'static str> {
+        let size = core::mem::size_of::<MemoryAttributesTable>() + core::mem::size_of_val(entries);
+        let table = self
+            .allocate_pool::<u8>(EfiACPIReclaimMemory, size)?
+            .cast::<MemoryAttributesTable>();
+
+        // SAFETY: `table` points to a pool allocation of `size` bytes, which is not shared with
+        // anyone else yet. This covers the table and its entries, and pool allocations are at
+        // least 16 byte aligned, which is sufficient for both.
+        unsafe {
+            table.write(MemoryAttributesTable {
+                version: 2,
+                number_of_entries: entries.len() as u32,
+                descriptor_size: core::mem::size_of::<EfiMemoryDescriptor>() as u32,
+                flags: 0 & EFI_MEMORY_ATTRIBUTES_FLAGS_RT_FORWARD_CONTROL_FLOW_GUARD,
+                entry: [],
+            });
+            (&raw mut (*table.as_ptr()).entry)
+                .cast::<EfiMemoryDescriptor>()
+                .copy_from_nonoverlapping(entries.as_ptr(), entries.len());
+        }
+        Ok(ConfigurationTablePointer::Managed(table.cast()))
     }
 
     fn insert_region(&self, mm: &mut MemMap, desc: &EfiMemoryDescriptor) {
@@ -653,10 +659,10 @@ impl MemoryMap {
             let mm = self.memmap.borrow();
             let key = self.mapkey.load(Ordering::Acquire);
 
-            if let Some(table) = self.get_memattr_table(&mm, key) {
+            if let Some(entries) = self.get_memattr_entries(&mm, key) {
                 drop(mm);
 
-                let table = self.box_new(EfiACPIReclaimMemory, table).ok()?;
+                let table = self.new_memattr_table(&entries).ok()?;
                 EFI.install_configtable(&EFI_MEMORY_ATTRIBUTES_TABLE_GUID, table);
 
                 // We have updated the memory attributes tables, which itself may have caused changes

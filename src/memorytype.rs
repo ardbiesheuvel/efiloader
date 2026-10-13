@@ -85,17 +85,6 @@ pub struct EfiMemoryDescriptor {
 }
 
 impl EfiMemoryDescriptor {
-    pub(crate) const fn zeroed() -> Self {
-        EfiMemoryDescriptor {
-            r#type: EfiMemoryType::EfiReservedEfiMemoryType,
-            physical_start: 0,
-            virtual_start: 0,
-            number_of_pages: 0,
-            attribute: 0,
-            rt_attribute: 0,
-        }
-    }
-
     /// Returns whether the descriptor covers part of the range described by `phys`
     /// and `num_pages`
     pub(crate) fn intersects(&self, phys: u64, num_pages: u64) -> bool {
