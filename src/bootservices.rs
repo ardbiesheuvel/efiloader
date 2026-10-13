@@ -676,7 +676,7 @@ extern "efiapi" fn locate_handle(
     buffer_size: *mut usize,
     buffer: *mut Handle,
 ) -> Status {
-    if buffer.is_null() || buffer_size.is_null() {
+    if buffer_size.is_null() {
         return Status::EFI_INVALID_PARAMETER;
     }
 
@@ -690,11 +690,14 @@ extern "efiapi" fn locate_handle(
             // UINTN.
             let buffer_size = unsafe { &mut *buffer_size };
             if size > *buffer_size {
+                // `buffer` may be NULL in this case, which is how the caller can query the size
                 *buffer_size = size;
                 Status::EFI_BUFFER_TOO_SMALL
+            } else if buffer.is_null() {
+                Status::EFI_INVALID_PARAMETER
             } else {
-                // SAFETY: we honour the caller's buffer and size arguments,
-                // and don't exceed the size of the vector
+                // SAFETY: `buffer` is not NULL, and the UEFI spec requires it to point to a buffer
+                // of `*buffer_size` bytes, which was checked above to be sufficient.
                 unsafe {
                     ptr::copy(handles.as_ptr(), buffer, handles.len());
                 }
