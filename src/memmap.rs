@@ -18,7 +18,7 @@ use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut, Range};
 use core::ptr::*;
 use core::slice;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Requested placement for page allocations. The variants `Max`, `Fixed` and `Anywhere` are 1:1
 /// equivalents of the EFI AllocatePages() boot service's `Type` argument.
@@ -83,6 +83,7 @@ pub struct MemoryMap {
     image_pages: RefCell<BTreeMap<u64, u64>>,
     mapkey: AtomicUsize,
     mem_attr_mapkey: AtomicUsize,
+    mem_attr_disabled: AtomicBool,
 }
 
 impl MemoryMap {
@@ -98,7 +99,21 @@ impl MemoryMap {
             image_pages: RefCell::new(BTreeMap::new()),
             mapkey: AtomicUsize::new(1),
             mem_attr_mapkey: AtomicUsize::new(0),
+            mem_attr_disabled: AtomicBool::new(false),
         }
+    }
+
+    /// Don't generate an EFI Memory Attributes Table describing the runtime regions in the memory
+    /// map, and don't install it as a configuration table. This permits the embedder to install
+    /// a Memory Attributes Table of its own using
+    /// [`EfiContext::install_configtable`](crate::EfiContext::install_configtable), e.g., the one
+    /// provided by the underlying firmware, if the firmware's runtime regions are declared
+    /// unchanged. Such a table can describe those regions more accurately than the single set of
+    /// permissions per region that is passed to
+    /// [`declare_runtime_region`](Self::declare_runtime_region). Note that it will not describe
+    /// any runtime regions that are allocated by the EFI runtime itself.
+    pub fn disable_memattr_table(&self) {
+        self.mem_attr_disabled.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn allocate_pool<T>(
@@ -209,6 +224,9 @@ impl MemoryMap {
     }
 
     fn get_memattr_entries(&self, mm: &MemMap, mapkey: usize) -> Option<Vec<EfiMemoryDescriptor>> {
+        if self.mem_attr_disabled.load(Ordering::Relaxed) {
+            return None;
+        }
         if self.mem_attr_mapkey.swap(mapkey, Ordering::Acquire) == mapkey {
             return None;
         }
