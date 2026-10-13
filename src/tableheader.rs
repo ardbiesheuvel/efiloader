@@ -2,6 +2,7 @@
 // Copyright 2022-2023 Google LLC
 // Author: Ard Biesheuvel <ardb@google.com>
 
+use core::mem::size_of;
 use core::slice;
 use core::sync::atomic::{compiler_fence, Ordering};
 use crc::{Crc, CRC_32_ISO_HDLC};
@@ -15,18 +16,28 @@ pub struct TableHeader {
     pub reserved: u32,
 }
 
-impl TableHeader {
-    pub fn update_crc(&mut self) {
-        self.crc32 = 0;
+/// EFI tables that start with a TableHeader, which carries a CRC32 of the entire table.
+///
+/// Implementations should be `repr(C)` structs whose first field is the TableHeader returned by
+/// `header()`, and whose size is recorded in its `header_size` field.
+///
+/// # Safety
+///
+/// Implementations must not contain any padding, as update_crc() reads the entire table as a byte
+/// slice.
+pub(crate) unsafe trait EfiTable: Sized {
+    fn header(&mut self) -> &mut TableHeader;
+
+    /// Recomputes the CRC32 of the table, e.g., after it has been modified.
+    fn update_crc(&mut self) {
+        self.header().crc32 = 0;
         compiler_fence(Ordering::Release);
 
-        // SAFETY: TableHeader is only used as the first field of repr(C) EFI tables, whose size is
-        // recorded in `header_size`, and so `header_size` bytes can be read starting at `self`.
-        // Note that this includes padding, which is not guaranteed to be initialized (e.g., after
-        // the system table's FirmwareRevision field).
-        let s = unsafe {
-            slice::from_raw_parts(self as *const _ as *const u8, self.header_size as usize)
-        };
-        self.crc32 = Crc::<u32>::new(&CRC_32_ISO_HDLC).checksum(s);
+        // SAFETY: `self` covers size_of::<Self>() bytes, all of which are initialized, given that
+        // implementations of this trait have no padding.
+        let s =
+            unsafe { slice::from_raw_parts(self as *const Self as *const u8, size_of::<Self>()) };
+        let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC).checksum(s);
+        self.header().crc32 = crc;
     }
 }

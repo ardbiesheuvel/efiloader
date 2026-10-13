@@ -278,10 +278,21 @@ impl BootServices {
             set_mem: set_mem,
             //create_event_ex: create_event_ex,
         };
-        bs.hdr.update_crc();
+        bs.update_crc();
         bs
     }
 }
+
+// SAFETY: BootServices consists of a TableHeader followed by pointer sized fields only, and so it
+// has no padding, as checked below.
+unsafe impl EfiTable for BootServices {
+    fn header(&mut self) -> &mut TableHeader {
+        &mut self.hdr
+    }
+}
+
+const _: () =
+    assert!(size_of::<BootServices>() == size_of::<TableHeader>() + 43 * size_of::<usize>());
 
 static CURRENT_TPL: AtomicUsize = AtomicUsize::new(TPL_APPLICATION);
 

@@ -8,6 +8,7 @@ use crate::{
 };
 
 use const_utf16::encode_null_terminated;
+use core::mem::size_of;
 use core::ptr;
 
 #[repr(C)]
@@ -15,6 +16,8 @@ pub struct SystemTable {
     pub(super) hdr: TableHeader,
     firmware_vendor: *const Char16,
     firmware_revision: u32,
+    // Explicit padding, so that the CRC32 is not computed over uninitialized bytes
+    _pad: u32,
     console_in_handle: Handle,
     con_in: *const EfiSimpleTextInput,
     console_out_handle: Handle,
@@ -26,6 +29,19 @@ pub struct SystemTable {
     pub(super) number_of_table_entries: usize,
     pub(super) configuration_table: *mut configtable::Tuple,
 }
+
+// SAFETY: SystemTable consists of a TableHeader followed by two u32 fields and pointer sized fields
+// only, and so it has no padding, as checked below.
+unsafe impl EfiTable for SystemTable {
+    fn header(&mut self) -> &mut TableHeader {
+        &mut self.hdr
+    }
+}
+
+const _: () = assert!(
+    size_of::<SystemTable>()
+        == size_of::<TableHeader>() + 2 * size_of::<u32>() + 11 * size_of::<usize>()
+);
 
 impl SystemTable {
     pub(super) fn new(
@@ -39,12 +55,13 @@ impl SystemTable {
             hdr: TableHeader {
                 signature: [b'I', b'B', b'I', b' ', b'S', b'Y', b'S', b'T'],
                 revision: UEFI_REVISION,
-                header_size: core::mem::size_of::<SystemTable>() as u32,
+                header_size: size_of::<SystemTable>() as u32,
                 crc32: 0,
                 reserved: 0,
             },
             firmware_vendor: encode_null_terminated!("Google").as_ptr(),
             firmware_revision: UEFI_REVISION,
+            _pad: 0,
             console_in_handle: conhandle,
             con_in: conin,
             console_out_handle: conhandle,
@@ -56,7 +73,7 @@ impl SystemTable {
             number_of_table_entries: 0,
             configuration_table: ptr::null_mut(),
         };
-        st.hdr.update_crc();
+        st.update_crc();
         st
     }
 }

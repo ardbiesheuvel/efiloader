@@ -2,6 +2,7 @@
 // Copyright 2022-2023 Google LLC
 // Author: Ard Biesheuvel <ardb@google.com>
 
+use crate::tableheader::EfiTable;
 use crate::ConfigurationTablePointer::*;
 use crate::EfiContext;
 use crate::EfiMemoryType::EfiRuntimeServicesData;
@@ -114,7 +115,7 @@ impl ConfigTableDb {
 
         if st.number_of_table_entries != map.len() {
             st.number_of_table_entries = map.len();
-            st.hdr.update_crc();
+            st.update_crc();
         }
 
         for (entry, table) in slice.iter_mut().zip(map.values()) {

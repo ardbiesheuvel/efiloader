@@ -58,7 +58,8 @@ macro_rules! align_up {
 
 use crate::{
     bootservices::*, configtable::*, loadedimage::*, memattr::*, memmap::*, memorytype::*,
-    peloader::*, rng::*, runtimeservices::*, simpletext::*, systemtable::*, EfiMemoryType::*,
+    peloader::*, rng::*, runtimeservices::*, simpletext::*, systemtable::*, tableheader::EfiTable,
+    EfiMemoryType::*,
 };
 
 use core::cell::*;
@@ -465,7 +466,7 @@ impl EfiContext {
         let mut rt = self.rt.borrow_mut();
         rt.get_time = get;
         set.map(|s| rt.set_time = s);
-        rt.hdr.update_crc();
+        rt.update_crc();
     }
 
     /// Override the Get/SetVariable EFI runtime services by local implementations.
@@ -479,21 +480,21 @@ impl EfiContext {
         rt.get_variable = get;
         rt.get_next_variable_name = get_next;
         set.map(|s| rt.set_variable = s);
-        rt.hdr.update_crc();
+        rt.update_crc();
     }
 
     /// Override the ResetSystem EFI runtime services by a local implementation
     pub fn override_reset_handler(&self, f: ResetSystem) {
         let mut rt = self.rt.borrow_mut();
         rt.reset_system = f;
-        rt.hdr.update_crc();
+        rt.update_crc();
     }
 
     /// Override the Stall EFI boot service by a local implementations
     pub fn override_stall_handler(&self, f: Stall) {
         let mut bs = self.bs.borrow_mut();
         bs.stall = f;
-        bs.hdr.update_crc();
+        bs.update_crc();
     }
 
     fn write_string(s: &str) {

@@ -6,6 +6,8 @@ use crate::UEFI_REVISION;
 use crate::{memorytype::*, status::*, tableheader::*};
 use crate::{Bool, Char16, Guid, PhysicalAddress};
 
+use core::mem::size_of;
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct Time {
@@ -272,7 +274,18 @@ impl RuntimeServices {
 
             query_variable_info: query_variable_info,
         };
-        rt.hdr.update_crc();
+        rt.update_crc();
         rt
     }
 }
+
+// SAFETY: RuntimeServices consists of a TableHeader followed by pointer sized fields only, and so
+// it has no padding, as checked below.
+unsafe impl EfiTable for RuntimeServices {
+    fn header(&mut self) -> &mut TableHeader {
+        &mut self.hdr
+    }
+}
+
+const _: () =
+    assert!(size_of::<RuntimeServices>() == size_of::<TableHeader>() + 14 * size_of::<usize>());
