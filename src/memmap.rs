@@ -348,7 +348,9 @@ impl MemoryMap {
     /// Declare `range` as a EFI_MEMORY_RUNTIME region in the EFI memory map. This means that the
     /// region will be described to the OS as a region that needs to be mapped during calls to EFI
     /// runtime services.
-    /// The region must not exist yet in the memory map.
+    /// The region must not exist yet in the memory map, and must not be of type
+    /// EfiConventionalMemory: use [`declare_memory_region`](Self::declare_memory_region) to
+    /// declare memory that may be allocated from.
     pub fn declare_runtime_region(
         &self,
         range: &Range<usize>,
@@ -356,6 +358,11 @@ impl MemoryMap {
         attr: u64,
         rtattr: u64,
     ) -> Result<(), ()> {
+        // Page allocations are served from EfiConventionalMemory regions, and so declaring such
+        // a region here would circumvent the safety requirements of declare_memory_region()
+        if _type == EfiConventionalMemory {
+            return Err(());
+        }
         let mut mm = self.memmap.borrow_mut();
         let phys = range.start as PhysicalAddress;
         let pages = (range.end - range.start) as u64 >> EFI_PAGE_SHIFT;
