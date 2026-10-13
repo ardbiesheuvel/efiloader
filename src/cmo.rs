@@ -26,14 +26,15 @@ pub fn dcache_clean_to_pou(range: &Range<usize>) {
     if (ctr & CTR_IDC) == 0 {
         let line_shift = 2 + ((ctr >> CTR_DMINLINE_SHIFT) & CTR_DMINLINE_MASK);
         let line_size: usize = 1 << line_shift;
-        let len = range.end - range.start;
-        let num_lines = (len + line_size - 1) >> line_shift;
-        let mut line: usize = range.start;
+        // Start at the cache line that covers the start of the range, which is not necessarily
+        // aligned to the cache line size
+        let mut line: usize = range.start & !(line_size - 1);
 
-        for _ in 0..num_lines {
+        while line < range.end {
             // SAFETY: Cleaning a cache line to the PoU does not affect the contents of memory as
-            // observed by the program. `line` is covered by `range`, which describes a region of a
-            // loaded image, and is therefore mapped.
+            // observed by the program. `line` is in the same cache line, and therefore in the same
+            // page, as an address covered by `range`, which describes a region of a loaded image,
+            // and is therefore mapped.
             unsafe {
                 asm!("dc cvau, {reg}",
                     reg = in(reg) line,
