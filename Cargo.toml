@@ -1,6 +1,6 @@
 [package]
 name = "efiloader"
-version = "0.0.2"
+version = "0.1.0"
 edition = "2024"
 license = "GPL-2.0"
 description = "A library implementing a EFI runtime that can boot Linux kernels and related executables"
