@@ -283,16 +283,22 @@ impl MemoryMap {
             .find(|&d| d.intersects(phys, num_pages))
             .map_or(Ok(()), |_| Err(()))?;
 
-        // Check whether the created/updated entry ends right where an
-        // entry of the same type starts. If so, remove it and add its
-        // page count to the new entry.
+        // Entries can only be merged if they have the same type and attributes, and in the case
+        // of runtime regions, the same permissions, as these are described individually in the
+        // Memory Attributes Table.
+        let mergeable = |d: &EfiMemoryDescriptor| {
+            d.r#type == _type
+                && d.attribute == attr
+                && (attr & EFI_MEMORY_RUNTIME == 0 || d.rt_attribute == rtattr)
+        };
+
+        // Check whether the created/updated entry ends right where a
+        // mergeable entry starts. If so, remove it and add its page count
+        // to the new entry.
         let num_pages = {
             let mut l = num_pages;
             mm.retain(|p, d| {
-                if *p == phys + (num_pages << EFI_PAGE_SHIFT)
-                    && d.r#type == _type
-                    && d.attribute == attr
-                {
+                if *p == phys + (num_pages << EFI_PAGE_SHIFT) && mergeable(d) {
                     l += d.number_of_pages;
                     false
                 } else {
@@ -302,14 +308,11 @@ impl MemoryMap {
             l
         };
 
-        // Check if an entry exists with the same type and attributes
-        // that ends right where this one starts. If so, update it to
-        // cover the newly declared region instead of creating a new
-        // entry.
+        // Check if a mergeable entry exists that ends right where this
+        // one starts. If so, update it to cover the newly declared region
+        // instead of creating a new entry.
         if let Some(desc) = mm.values_mut().find(|d| {
-            d.physical_start + (d.number_of_pages << EFI_PAGE_SHIFT) == phys
-                && d.r#type == _type
-                && d.attribute == attr
+            d.physical_start + (d.number_of_pages << EFI_PAGE_SHIFT) == phys && mergeable(d)
         }) {
             desc.number_of_pages += num_pages;
         } else {
