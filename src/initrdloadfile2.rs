@@ -4,7 +4,7 @@
 
 use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
 use crate::devicepath::{DevicePath, VendorMedia};
-use crate::devicepath::{DevicePathSubtype::*, DevicePathType::*};
+use crate::devicepath::{DevicePathSubtype, DevicePathType};
 use crate::EfiContext;
 use crate::EfiProtocol;
 use crate::FileLoader;
@@ -73,7 +73,7 @@ extern "efiapi" fn load_file(
     // SAFETY: `file_path` is not NULL, and the UEFI spec requires it to point to a valid device
     // path.
     let file_path = unsafe { &*file_path };
-    if file_path._type != EFI_DEV_END_PATH {
+    if file_path._type != DevicePathType::EFI_DEV_END_PATH {
         return Status::EFI_NOT_FOUND;
     }
 
@@ -118,15 +118,15 @@ pub(crate) fn install(ctx: &EfiContext, loader: impl FileLoader + Send + 'static
         InitrdDevicePath {
             vendor: VendorMedia {
                 header: DevicePath {
-                    _type: EFI_DEV_MEDIA,
-                    subtype: EFI_DEV_MEDIA_VENDOR,
+                    _type: DevicePathType::EFI_DEV_MEDIA,
+                    subtype: DevicePathSubtype::EFI_DEV_MEDIA_VENDOR,
                     size: size_of::<VendorMedia>() as u16,
                 },
                 vendor_guid: LINUX_EFI_INITRD_MEDIA_GUID,
             },
             end: DevicePath {
-                _type: EFI_DEV_END_PATH,
-                subtype: EFI_DEV_END_ENTIRE,
+                _type: DevicePathType::EFI_DEV_END_PATH,
+                subtype: DevicePathSubtype::EFI_DEV_END_ENTIRE,
                 size: size_of::<DevicePath>() as u16,
             },
         },

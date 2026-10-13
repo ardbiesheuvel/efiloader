@@ -3,6 +3,7 @@
 // Author: Ard Biesheuvel <ardb@google.com>
 
 use crate::{guid, Guid};
+use core::mem::size_of;
 
 pub const EFI_DEVICE_PATH_PROTOCOL_GUID: Guid = guid!(
     0x9576e91,
@@ -11,20 +12,26 @@ pub const EFI_DEVICE_PATH_PROTOCOL_GUID: Guid = guid!(
     [0x8e, 0x39, 0x0, 0xa0, 0xc9, 0x69, 0x72, 0x3b]
 );
 
-#[allow(non_camel_case_types)]
-#[derive(Copy, Clone, PartialEq, Debug)]
-#[repr(u8)]
-pub enum DevicePathType {
-    EFI_DEV_MEDIA = 4,
-    EFI_DEV_END_PATH = 0x7f,
+/// The type of a device path node. This is not an enum, as device paths provided by EFI images may
+/// contain any value, rather than only the ones that this crate uses.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct DevicePathType(pub u8);
+
+impl DevicePathType {
+    pub const EFI_DEV_MEDIA: Self = Self(4);
+    pub const EFI_DEV_END_PATH: Self = Self(0x7f);
 }
 
-#[allow(non_camel_case_types)]
-#[derive(Copy, Clone, PartialEq, Debug)]
-#[repr(u8)]
-pub enum DevicePathSubtype {
-    EFI_DEV_MEDIA_VENDOR = 3,
-    EFI_DEV_END_ENTIRE = 0xff,
+/// The subtype of a device path node. This is not an enum, as device paths provided by EFI images
+/// may contain any value, rather than only the ones that this crate uses.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct DevicePathSubtype(pub u8);
+
+impl DevicePathSubtype {
+    pub const EFI_DEV_MEDIA_VENDOR: Self = Self(3);
+    pub const EFI_DEV_END_ENTIRE: Self = Self(0xff);
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -53,6 +60,12 @@ impl DevicePath {
         while *l == *r {
             if l._type == DevicePathType::EFI_DEV_END_PATH || l.size != r.size {
                 break;
+            }
+
+            // A node that does not cover its own header is malformed, and a node size of 0 would
+            // make this loop forever
+            if (l.size as usize) < size_of::<DevicePath>() {
+                return None;
             }
 
             let p1 = l as *const _ as *const u8;
