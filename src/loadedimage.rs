@@ -166,7 +166,8 @@ impl EfiLoadedImage {
         let stack = {
             let s = self
                 .ctx
-                .allocate_pool(EfiMemoryType::EfiBootServicesData, EFI_STACK_SIZE);
+                .memmap
+                .allocate_pool::<u8>(EfiMemoryType::EfiBootServicesData, EFI_STACK_SIZE);
             if s.is_err() {
                 return Status::EFI_OUT_OF_RESOURCES;
             }
@@ -191,7 +192,7 @@ impl EfiLoadedImage {
             )
         };
         CURRENT_IMAGE.store(previous, Ordering::Relaxed);
-        self.ctx.free_pool(stack).ok();
+        self.ctx.memmap.free_pool(stack).ok();
         ret
     }
 }

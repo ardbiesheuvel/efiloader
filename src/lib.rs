@@ -31,7 +31,8 @@
 //! ) {
 //!     let ram = 0..0x100_0000;
 //!     let memmap = efiloader::memmap::MemoryMap::new();
-//!     memmap.declare_memory_region(&ram).unwrap();
+//!     // SAFETY: the first 16 MiB of physical memory are unused and identity mapped
+//!     unsafe { memmap.declare_memory_region(&ram) }.unwrap();
 //!
 //!     let efi = efiloader::init(
 //!         None::<&dyn efiloader::SimpleConsole>,
@@ -567,7 +568,12 @@ impl EfiContext {
 
     /// Free pool memory at `buffer` that was allocated via [`allocate_pool`](Self::allocate_pool).
     /// Return an error if `buffer` is not recognized as a valid pool allocation.
-    pub fn free_pool(&self, buffer: *const u8) -> Result<(), ()> {
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must have been returned by [`allocate_pool`](Self::allocate_pool), and must not
+    /// be accessed after this call.
+    pub unsafe fn free_pool(&self, buffer: *const u8) -> Result<(), ()> {
         self.memmap.free_pool(buffer)
     }
 
@@ -586,7 +592,13 @@ impl EfiContext {
 
     /// Deallocate `pages` 4KiB pages of memory as address `base`. Returns an `Ok` result on
     /// success, or `Err` if the pages could not be freed.
-    pub fn free_pages(&self, base: u64, pages: usize) -> Result<(), ()> {
+    ///
+    /// # Safety
+    ///
+    /// The pages must have been allocated via [`allocate_pages`](Self::allocate_pages), and must
+    /// not be accessed after this call, i.e., the part of the slice returned by
+    /// [`allocate_pages`](Self::allocate_pages) that covers them must no longer be used.
+    pub unsafe fn free_pages(&self, base: u64, pages: usize) -> Result<(), ()> {
         self.memmap.free_pages(base, pages)
     }
 }

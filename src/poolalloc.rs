@@ -111,9 +111,9 @@ impl PoolAllocator {
     }
 
     pub(crate) fn deallocate(&mut self, buffer: *const u8, layout: Layout) {
-        // SAFETY: This is only called by MemoryMap::free_pool(), for allocations that allocate()
-        // returned, and that were recorded along with their layout. This means `buffer` is a
-        // non-NULL pointer that was returned by this heap for the same layout.
+        // SAFETY: This is only called by MemoryMap::free_pool_for(), for allocations that
+        // allocate() returned, and that were recorded along with their layout. This means `buffer`
+        // is a non-NULL pointer that was returned by this heap for the same layout.
         unsafe {
             self.heap
                 .deallocate(NonNull::new_unchecked(buffer as _), layout)

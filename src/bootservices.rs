@@ -317,8 +317,11 @@ extern "efiapi" fn allocate_pages(
         }
     };
 
-    let ret = if let Some(region) = EFI.allocate_pages(pages, memory_type, placement) {
-        *m = region.as_ptr() as PhysicalAddress;
+    let ret = if let Some(base) = EFI
+        .memmap
+        .allocate_image_pages(pages, memory_type, placement)
+    {
+        *m = base;
         Status::EFI_SUCCESS
     } else {
         Status::EFI_OUT_OF_RESOURCES
@@ -331,7 +334,8 @@ extern "efiapi" fn free_pages(memory: PhysicalAddress, pages: usize) -> Status {
     if (memory as usize & EFI_PAGE_MASK) != 0 {
         return Status::EFI_INVALID_PARAMETER;
     }
-    let ret = if let Ok(_) = EFI.free_pages(memory, pages) {
+    // Only pages allocated via AllocatePages() may be freed
+    let ret = if let Ok(_) = EFI.memmap.free_image_pages(memory, pages) {
         Status::EFI_SUCCESS
     } else {
         Status::EFI_NOT_FOUND
@@ -419,7 +423,7 @@ extern "efiapi" fn allocate_pool(pool_type: u32, size: usize, buffer: *mut *mut 
         return Status::EFI_INVALID_PARAMETER;
     }
 
-    if let Ok(buf) = EFI.allocate_pool(pool_type, size) {
+    if let Ok(buf) = EFI.memmap.allocate_image_pool::<u8>(pool_type, size) {
         // SAFETY: `buffer` is not NULL, and the UEFI spec requires it to point to a writable
         // pointer sized location.
         unsafe { *buffer = buf.as_ptr() as _ };
@@ -430,7 +434,9 @@ extern "efiapi" fn allocate_pool(pool_type: u32, size: usize, buffer: *mut *mut 
 }
 
 extern "efiapi" fn free_pool(buffer: *mut ()) -> Status {
-    if EFI.free_pool(buffer as _).is_ok() {
+    // Only memory allocated via AllocatePool(), or returned by other boot services that allocate
+    // pool memory on behalf of the caller, may be freed
+    if EFI.memmap.free_image_pool(buffer as _).is_ok() {
         return Status::EFI_SUCCESS;
     }
     Status::EFI_INVALID_PARAMETER
@@ -1086,7 +1092,7 @@ extern "efiapi" fn protocols_per_handle(
 
     let ret = if let Ok(buf) = EFI
         .memmap
-        .allocate_pool::<*const Guid>(EfiMemoryType::EfiLoaderData, guids.len())
+        .allocate_image_pool::<*const Guid>(EfiMemoryType::EfiLoaderData, guids.len())
     {
         // SAFETY: `buf` was allocated with the size and alignment of `guids.len()` GUID pointers,
         // and so it can hold a copy of the contents of `guids`.
@@ -1124,7 +1130,7 @@ extern "efiapi" fn locate_handle_buffer(
 
             if let Ok(buf) = EFI
                 .memmap
-                .allocate_pool::<Handle>(EfiMemoryType::EfiLoaderData, handles.len())
+                .allocate_image_pool::<Handle>(EfiMemoryType::EfiLoaderData, handles.len())
             {
                 // SAFETY: `buf` was allocated with the size and alignment of `handles.len()`
                 // handles, and so it can hold a copy of the contents of `handles`.
