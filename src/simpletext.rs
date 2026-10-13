@@ -7,6 +7,7 @@ use crate::EfiProtocol;
 use crate::{status::*, Bool, Char16, Event, Guid};
 
 use alloc::boxed::Box;
+use core::cell::Cell;
 use core::marker::PhantomPinned;
 use core::pin::Pin;
 use core::ptr;
@@ -40,6 +41,9 @@ pub struct EfiSimpleTextInput {
 pub(crate) struct SimpleTextInput {
     pub(crate) text_input: EfiSimpleTextInput,
     conin: fn() -> Option<u8>,
+    // Pointers to this instance are held by the system table and EFI images, so it must not be
+    // moved, and references to it must not be assumed to be unique
+    pin: PhantomPinned,
 }
 
 type Reset<T> = extern "efiapi" fn(this: *mut T, extended_verification: Bool) -> Status;
@@ -52,8 +56,8 @@ pub struct EfiSimpleTextOutputMode {
     max_mode: i32,
     mode: i32,
     attribute: i32,
-    cursor_column: i32,
-    cursor_row: i32,
+    cursor_column: Cell<i32>,
+    cursor_row: Cell<i32>,
     cursor_visible: Bool,
 }
 
@@ -137,6 +141,7 @@ impl SimpleTextInput {
                 wait_for_key: Event(ptr::null_mut()),
             },
             conin: conin,
+            pin: PhantomPinned,
         })
     }
 
@@ -229,27 +234,25 @@ extern "efiapi" fn output_string(this: *mut EfiSimpleTextOutput, string: *const 
 
     // SAFETY: Neither pointer is NULL. `this` must point to the protocol instance that this
     // function was called through, which is the first field of the repr(C) SimpleTextOutput
-    // instance that this crate exposes, and so it can be cast to a pointer to it. `string` must
-    // point to a NUL terminated UCS-2 string, as the UEFI spec requires.
+    // instance that this crate exposes, and so it can be cast to a pointer to it. Only a shared
+    // reference is created, as other pointers to the instance exist. `string` must point to a NUL
+    // terminated UCS-2 string, as the UEFI spec requires.
     let (this, string) = unsafe {
         (
-            &mut *(this as *mut SimpleTextOutput),
+            &*(this as *const SimpleTextOutput),
             widestring::U16CStr::from_ptr_str(string).to_string_lossy(),
         )
     };
 
     (this.conout)(&string);
+    let mode = &this.mode;
     for s in string.chars() {
         match s {
-            '\r' => {
-                this.mode.cursor_column = 0;
-            }
-            '\n' => {
-                this.mode.cursor_row += 1;
-            }
-            _ => {
-                this.mode.cursor_column += 1;
-            }
+            '\r' => mode.cursor_column.set(0),
+            '\n' => mode.cursor_row.set(mode.cursor_row.get().wrapping_add(1)),
+            _ => mode
+                .cursor_column
+                .set(mode.cursor_column.get().wrapping_add(1)),
         };
     }
     Status::EFI_SUCCESS
@@ -312,11 +315,12 @@ extern "efiapi" fn clear_screen(this: *mut EfiSimpleTextOutput) -> Status {
 
     log::trace!("Clear screen");
     // SAFETY: `this` is not NULL, and points to the first field of the repr(C) SimpleTextOutput
-    // instance that this crate exposes, and so it can be cast to a pointer to it.
-    let this = unsafe { &mut *(this as *mut SimpleTextOutput) };
+    // instance that this crate exposes, and so it can be cast to a pointer to it. Only a shared
+    // reference is created, as other pointers to the instance exist.
+    let this = unsafe { &*(this as *const SimpleTextOutput) };
     (this.conout)("\x1b[=3h\x1b[2J\x1b[H");
-    this.mode.cursor_column = 0;
-    this.mode.cursor_row = 0;
+    this.mode.cursor_column.set(0);
+    this.mode.cursor_row.set(0);
     Status::EFI_SUCCESS
 }
 
@@ -334,10 +338,11 @@ extern "efiapi" fn set_cursor_position(
     }
     log::trace!("Set cursor position to {row},{column}");
     // SAFETY: `this` is not NULL, and points to the first field of the repr(C) SimpleTextOutput
-    // instance that this crate exposes, and so it can be cast to a pointer to it.
-    let this = unsafe { &mut *(this as *mut SimpleTextOutput) };
-    this.mode.cursor_column = column as i32;
-    this.mode.cursor_row = row as i32;
+    // instance that this crate exposes, and so it can be cast to a pointer to it. Only a shared
+    // reference is created, as other pointers to the instance exist.
+    let this = unsafe { &*(this as *const SimpleTextOutput) };
+    this.mode.cursor_column.set(column as i32);
+    this.mode.cursor_row.set(row as i32);
 
     let column = column as u8 + 1;
     let row = row as u8 + 1;
@@ -382,8 +387,8 @@ impl SimpleTextOutput {
                 max_mode: 0,
                 mode: 0,
                 attribute: 0,
-                cursor_column: 0,
-                cursor_row: 0,
+                cursor_column: Cell::new(0),
+                cursor_row: Cell::new(0),
                 cursor_visible: 1,
             },
             conout: conout,

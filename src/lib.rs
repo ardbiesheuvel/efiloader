@@ -373,10 +373,14 @@ pub fn init(
             .box_new(EfiRuntimeServicesData, RuntimeServices::new())
             .or(Err(()))?;
 
+        // The console protocol methods cast the protocol pointers back to the SimpleTextInput and
+        // SimpleTextOutput instances that contain them, so derive the pointers from those.
+        let conin = inp.as_proto_ptr() as *const EfiSimpleTextInput;
+        let conout = out.as_proto_ptr() as *const EfiSimpleTextOutput;
         let st = memmap
             .box_new(
                 EfiRuntimeServicesData,
-                SystemTable::new(&*bs, &*rt, &inp.text_input, &out.text_output, conhandle),
+                SystemTable::new(&*bs, &*rt, conin, conout, conhandle),
             )
             .or(Err(()))?;
 
