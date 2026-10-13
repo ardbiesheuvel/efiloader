@@ -95,9 +95,16 @@ const EFI_IMAGE_SCN_MEM_EXECUTE: u32 = 0x20000000;
 //const EFI_IMAGE_SCN_MEM_READ: u32 = 0x40000000;
 const EFI_IMAGE_SCN_MEM_WRITE: u32 = 0x80000000;
 
+/// The offset of the optional header from the start of the PE header, i.e., the size of the PE
+/// signature and the COFF file header
+const OPTIONAL_HEADER_OFFSET: usize = 24;
+
+/// The number of data directory entries defined by the PE/COFF spec
+const MAX_RVA_AND_SIZES: usize = 16;
+
 impl PeSection {
     fn get_name(&self) -> &str {
-        from_utf8(&self.name).unwrap()
+        from_utf8(&self.name).unwrap_or("<invalid>")
     }
 }
 
@@ -191,11 +198,34 @@ impl<'a> PeLoader<'a> {
             return None;
         }
 
-        let petable_offset = doshdr.pe_offset + size_of::<PeHeader>() as u32;
+        if !pehdr.file_alignment.is_power_of_two() || !pehdr.section_alignment.is_power_of_two() {
+            debug!(
+                "Invalid file alignment {:x} or section alignment {:x}",
+                pehdr.file_alignment, pehdr.section_alignment
+            );
+            return None;
+        }
+
+        if pehdr.size_of_headers > pehdr.size_of_image
+            || pehdr.address_of_entrypoint >= pehdr.size_of_image
+        {
+            debug!(
+                "Headers ({:x}) or entry point ({:x}) exceed image size {:x}",
+                pehdr.size_of_headers, pehdr.address_of_entrypoint, pehdr.size_of_image
+            );
+            return None;
+        }
+
+        // The data directory is part of the optional header
+        let petable_offset = doshdr.pe_offset as usize + size_of::<PeHeader>();
         let petable_count = pehdr.number_of_rva_and_sizes as usize;
         let petable_size = size_of::<PeTable>() * petable_count;
-        if petable_offset as usize + petable_size > loader.get_size() {
-            debug!("PE table array runs past the end of the image");
+        if petable_count > MAX_RVA_AND_SIZES
+            || size_of::<PeHeader>() - OPTIONAL_HEADER_OFFSET + petable_size
+                > pehdr.size_of_optional_header as usize
+            || petable_offset + petable_size > loader.get_size()
+        {
+            debug!("Invalid PE table directory");
             return None;
         }
         let petable_directory = {
@@ -205,11 +235,7 @@ impl<'a> PeLoader<'a> {
             // only has integer fields, and so any bit pattern is a valid value.
             unsafe {
                 loader
-                    .load_range(
-                        v.as_mut_ptr() as *mut (),
-                        petable_offset as usize,
-                        petable_size,
-                    )
+                    .load_range(v.as_mut_ptr() as *mut (), petable_offset, petable_size)
                     .ok()?;
                 v.set_len(petable_count);
             }
@@ -217,10 +243,12 @@ impl<'a> PeLoader<'a> {
         };
         trace!("PE table directory: {:x?}", petable_directory);
 
-        let section_offset = doshdr.pe_offset + 24 + pehdr.size_of_optional_header as u32;
+        let section_offset = doshdr.pe_offset as usize
+            + OPTIONAL_HEADER_OFFSET
+            + pehdr.size_of_optional_header as usize;
         let section_count = pehdr.number_of_sections as usize;
         let sections_size = size_of::<PeSection>() * section_count;
-        if section_offset as usize + sections_size > loader.get_size() {
+        if section_offset + sections_size > loader.get_size() {
             debug!("Section array runs past the end of the image");
             return None;
         }
@@ -231,11 +259,7 @@ impl<'a> PeLoader<'a> {
             // only has integer fields, and so any bit pattern is a valid value.
             unsafe {
                 loader
-                    .load_range(
-                        v.as_mut_ptr() as *mut (),
-                        section_offset as usize,
-                        sections_size,
-                    )
+                    .load_range(v.as_mut_ptr() as *mut (), section_offset, sections_size)
                     .ok()?;
                 v.set_len(section_count);
             }
@@ -262,7 +286,7 @@ impl<'a> PeLoader<'a> {
                 return None;
             }
 
-            if s.virtual_address + s.virtual_size > pehdr.size_of_image {
+            if s.virtual_address as u64 + s.virtual_size as u64 > pehdr.size_of_image as u64 {
                 debug!(
                     "Section {} exceeds image size {:x}",
                     s.get_name(),
@@ -381,15 +405,11 @@ impl<'a> PeLoader<'a> {
         buf.fill(MaybeUninit::zeroed());
         // Load the PE header - some programs (such as GRUB or ACPI PRM runtime drivers)
         // rely on this even if the PE spec does not require it.
-        // SAFETY: `buf` is valid for writes of `buf.len()` bytes. This relies on the size of the
-        // headers not exceeding the size of the image, which is not checked.
+        let hdr = buf.get_mut(..self.pe_header.size_of_headers as usize)?;
+        // SAFETY: `hdr` is valid for writes of `hdr.len()` bytes.
         unsafe {
             self.file_loader
-                .load_range(
-                    buf.as_mut_ptr() as *mut (),
-                    0,
-                    self.pe_header.size_of_headers as usize,
-                )
+                .load_range(hdr.as_mut_ptr() as *mut (), 0, hdr.len())
                 .ok()?;
         }
 
@@ -400,16 +420,17 @@ impl<'a> PeLoader<'a> {
                 s.pointer_to_raw_data as usize,
                 s.size_of_raw_data as usize,
             );
-            // SAFETY: PeLoader::new() checked that the section's virtual extent is covered by the
-            // image, and so by `buf`, and no more than `vs` bytes are written at offset `va`.
+            let dst = buf.get_mut(va..va + vs)?;
+            // SAFETY: `dst` is valid for writes of `dst.len()` bytes, which is no less than the
+            // number of bytes that are copied into it.
             unsafe {
                 self.file_loader
-                    .load_range(buf[va].as_mut_ptr() as *mut (), ra, vs.min(rs))
+                    .load_range(dst.as_mut_ptr() as *mut (), ra, vs.min(rs))
                     .ok()?;
             }
             if vs > rs {
                 // Zero init remaining space
-                buf[va + rs..va + vs].fill(MaybeUninit::zeroed());
+                dst[rs..].fill(MaybeUninit::zeroed());
             }
         }
 
