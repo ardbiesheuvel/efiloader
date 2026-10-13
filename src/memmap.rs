@@ -157,12 +157,18 @@ impl MemoryMap {
 
     /// Declare a memory region `pool` as the region to be used for pool allocations of
     /// type `pool_type`. The region in question must already be accounted for in the
-    /// memory map by a region of the same type.
+    /// memory map by a region of the same type. Pool allocations of this type will be
+    /// served from this region only, and fail if it is exhausted. This fails if a pool
+    /// of type `pool_type` exists already.
     pub fn declare_pool(
         &self,
         pool_type: EfiMemoryType,
         pool: &'static mut [MaybeUninit<u8>],
     ) -> Result<(), ()> {
+        if pool.is_empty() {
+            return Err(());
+        }
+
         // Double check that the region is covered by the correct memory type
         let phys = pool.as_ptr() as u64;
         let num_pages = pool.len() >> EFI_PAGE_SHIFT;
@@ -174,6 +180,11 @@ impl MemoryMap {
 
         let mut db = self.pool_alloc_db.borrow_mut();
         let alloc = &mut db.allocators;
+        // Replacing an existing pool would result in its outstanding allocations being freed
+        // into the new one
+        if alloc.contains_key(&pool_type) {
+            return Err(());
+        }
         alloc.insert(pool_type, PoolAllocator::from_slice(pool_type, pool));
         Ok(())
     }

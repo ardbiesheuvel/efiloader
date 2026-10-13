@@ -18,6 +18,8 @@ pub(crate) struct PoolAllocator {
     heap: Heap,
     granularity: usize,
     allocated: usize,
+    /// The size of the region reserved for the pool, which the heap must never grow beyond
+    limit: usize,
 }
 
 /// The size of the region reserved by a pool allocator
@@ -26,15 +28,15 @@ const ARENA_SIZE: usize = 0x10_0000; // 1 MiB
 impl PoolAllocator {
     fn extend<'a>(&mut self, bytes: usize, mm: &'a MemoryMap) -> Result<(), ()> {
         let grow = align_up!(bytes, self.granularity);
-        if self.allocated + grow > ARENA_SIZE {
+        if self.allocated + grow > self.limit {
             return Err(());
         }
         self.grow_region(grow, mm)?;
-        // SAFETY: For pools created by new(), the heap covers the first `allocated` bytes of an
-        // arena of ARENA_SIZE bytes that is never freed, and the check above ensures that it is only
-        // extended into the remainder of the arena, which grow_region() has just converted to the
-        // pool's memory type. Note that this does not hold for pools created by from_slice() that
-        // are smaller than ARENA_SIZE.
+        // SAFETY: The heap covers the first `allocated` bytes of a region of `limit` bytes that is
+        // reserved for the pool and never freed (an arena allocated by new(), or the slice passed
+        // to from_slice()), and the check above ensures that it is only extended into the
+        // remainder of that region, which grow_region() has just converted to the pool's memory
+        // type.
         unsafe { Ok(self.heap.extend(grow)) }
     }
 
@@ -80,6 +82,7 @@ impl PoolAllocator {
             heap: Heap::from_slice(&mut arena[..granularity]),
             granularity: granularity,
             allocated: 0,
+            limit: ARENA_SIZE,
         };
         p.grow_region(granularity, mm)?;
         Ok(p)
@@ -92,6 +95,7 @@ impl PoolAllocator {
             heap: Heap::from_slice(buf),
             granularity: len,
             allocated: len,
+            limit: len,
         }
     }
 
