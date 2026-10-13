@@ -12,7 +12,6 @@ use crate::{EfiMemoryType, FileLoader, Placement};
 use alloc::vec::Vec;
 use core::mem::{size_of, MaybeUninit};
 use core::ops::Range;
-use core::slice;
 use core::str::from_utf8;
 use log::{debug, trace};
 
@@ -110,11 +109,8 @@ impl PeSection {
 
 const BASE_RELOC_TABLE_IDX: usize = 5;
 
-#[repr(C)]
-struct BaseRelocationBlock {
-    rva: u32,
-    size: u32,
-}
+/// The size of the header of a base relocation block: a 32-bit page RVA and a 32-bit block size
+const BASE_RELOC_BLOCK_HEADER_SIZE: usize = 8;
 
 const IMAGE_REL_BASED_ABSOLUTE: u16 = 0x0;
 const IMAGE_REL_BASED_DIR64: u16 = 0xa000;
@@ -306,86 +302,53 @@ impl<'a> PeLoader<'a> {
     }
 
     /// Applies the base relocations described by `tbl` to the image that was loaded into `buf`.
-    ///
-    /// # Safety
-    ///
-    /// All of `buf` must have been initialized.
-    unsafe fn apply_relocations(
-        &self,
-        buf: &mut [MaybeUninit<u8>],
-        tbl: &PeTable,
-    ) -> Result<(), ()> {
-        let (base, limit) = {
-            let l = buf.len() as isize;
-            let base = buf.as_mut_ptr() as *mut u8;
-            // SAFETY: `l` is the size of `buf`, and so the result points right past its end.
-            (base, unsafe { base.offset(l) })
+    fn apply_relocations(&self, buf: &mut [u8], tbl: &PeTable) -> Result<(), ()> {
+        let read_u32 = |buf: &[u8], offset: usize| {
+            u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize
         };
 
-        // SAFETY: This relies on the relocation directory being covered by `buf`, which is only
-        // checked below, after the pointer arithmetic has been performed.
-        let mut reloc = unsafe { base.offset(tbl.rva as isize) };
-        // SAFETY: Same as above.
-        let reloc_end = unsafe { reloc.offset(tbl.size as isize) };
+        // The relocation targets are adjusted by the difference between the actual and the
+        // preferred load address of the image
+        let delta = (buf.as_ptr() as u64).wrapping_sub(self.pe_header.image_base);
 
-        if reloc > limit || reloc_end > limit {
+        let mut block = tbl.rva as usize;
+        let end = block + tbl.size as usize;
+        if end > buf.len() {
             return Err(());
         }
 
-        while reloc < reloc_end {
-            const BSIZE: usize = size_of::<BaseRelocationBlock>();
-            // SAFETY: `reloc` is below `reloc_end`, and therefore inside `buf`, which is fully
-            // initialized. This relies on the block header being 32-bit aligned, and not extending
-            // past `reloc_end`, as the PE/COFF spec requires, neither of which is checked before it
-            // is accessed.
-            let block = unsafe { &*(reloc as *const BaseRelocationBlock) };
-            // SAFETY: Same as above.
-            reloc = unsafe { reloc.offset(BSIZE as isize) };
-            if reloc > reloc_end || (block.size as usize) < BSIZE {
+        while block < end {
+            // Each block consists of a header and a number of 16-bit entries
+            if end - block < BASE_RELOC_BLOCK_HEADER_SIZE {
+                return Err(());
+            }
+            let rva = read_u32(buf, block);
+            let size = read_u32(buf, block + 4);
+            if size < BASE_RELOC_BLOCK_HEADER_SIZE || size > end - block {
                 return Err(());
             }
 
-            let block_size = block.size as usize - BSIZE;
-            let block_len = block_size / size_of::<u16>();
-            // SAFETY: This relies on the relocation block being covered by the relocation
-            // directory, which is only checked below, after the slice has been created.
-            let entries: &[u16] = unsafe { slice::from_raw_parts(reloc as _, block_len) };
-            // SAFETY: Same as above.
-            reloc = unsafe { reloc.offset(block_size as isize) };
-            if reloc > reloc_end {
-                return Err(());
-            }
-
-            for e in entries {
-                let offset = block.rva + (*e as u32 % 0x1000);
-                // SAFETY: This relies on the relocation target being covered by `buf`, which is
-                // only checked below, after the pointer arithmetic has been performed.
-                let p = unsafe { base.offset(offset as isize) };
-                // SAFETY: Same as above.
-                if unsafe { p.offset(size_of::<u64>() as isize) } > limit {
-                    return Err(());
-                }
+            let entries = block + BASE_RELOC_BLOCK_HEADER_SIZE;
+            for i in 0..(size - BASE_RELOC_BLOCK_HEADER_SIZE) / size_of::<u16>() {
+                let e = entries + i * size_of::<u16>();
+                let entry = u16::from_le_bytes([buf[e], buf[e + 1]]);
 
                 // Don't bother with all the different relocation types
                 // Only the ones below are relevant for 64-bit architectures
-                match *e & IMAGE_REL_BASED_MASK {
+                match entry & IMAGE_REL_BASED_MASK {
                     IMAGE_REL_BASED_ABSOLUTE => (),
                     IMAGE_REL_BASED_DIR64 => {
-                        let p = p as *mut u64;
-
-                        // SAFETY: The 8 bytes at `p` are inside `buf`, as checked above, and are
-                        // accessed using unaligned loads and stores.
-                        unsafe {
-                            p.write_unaligned(
-                                p.read_unaligned() - self.pe_header.image_base + base as u64,
-                            );
-                        }
+                        let target = rva + (entry & !IMAGE_REL_BASED_MASK) as usize;
+                        let p = buf.get_mut(target..target + size_of::<u64>()).ok_or(())?;
+                        let value = u64::from_le_bytes((&*p).try_into().unwrap());
+                        p.copy_from_slice(&value.wrapping_add(delta).to_le_bytes());
                     }
                     _ => {
                         return Err(());
                     }
                 }
             }
+            block += size;
         }
         Ok(())
     }
@@ -436,8 +399,11 @@ impl<'a> PeLoader<'a> {
 
         if let Some(dir) = self.table_directory.get(BASE_RELOC_TABLE_IDX) {
             log::trace!("Applying PE relocations");
-            // SAFETY: `buf` was zero initialized above, before the image was loaded into it.
-            unsafe { self.apply_relocations(buf, dir) }.ok()?;
+            // SAFETY: `buf` was zero initialized above, and has only been written to by
+            // load_range() since, which copies file contents or zeroes into it. This means all of
+            // it is initialized, and so it can be accessed as a [u8] slice.
+            let image = unsafe { &mut *(&mut *buf as *mut [MaybeUninit<u8>] as *mut [u8]) };
+            self.apply_relocations(image, dir).ok()?;
         }
 
         // TODO free pages on failure
