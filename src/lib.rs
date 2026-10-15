@@ -57,12 +57,13 @@ macro_rules! align_up {
     };
 }
 
+use crate::devicepath::{file_path_device_path, VendorMediaDevicePath};
+use crate::simplefilesystem::CpioVolume;
 use crate::{
     bootservices::*, configtable::*, loadedimage::*, memattr::*, memmap::*, memorytype::*,
     peloader::*, rng::*, runtimeservices::*, simpletext::*, systemtable::*, tableheader::EfiTable,
     EfiMemoryType::*,
 };
-use crate::{devicepath::VendorMediaDevicePath, simplefilesystem::CpioVolume};
 
 use core::cell::*;
 use core::mem::*;
@@ -548,6 +549,27 @@ impl EfiContext {
     pub fn load_image<'a>(&'static self, loader: &'a dyn FileLoader) -> Option<LoadedImageData> {
         // Images loaded by the embedder have no parent image, and no known device of origin
         self.load_image_with_origin(loader, ImageOrigin::default())
+    }
+
+    /// Like [`load_image`](Self::load_image), but for an image that originates from the file at
+    /// `path` on the device with handle `device`, e.g., a volume that was installed via
+    /// [`install_cpio_volume`](Self::install_cpio_volume). Both are recorded in the loaded image
+    /// protocol of the image, so that it can locate other files on the device relative to its own
+    /// location, as systemd-stub does to find its addons and other sidecar files. `path` is a
+    /// backslash separated absolute path, e.g., `\EFI\Linux\linux.efi`, which is not accessed: the
+    /// contents of the image are provided by `loader`. Returns `None` if `path` is too long.
+    pub fn load_image_with_file_path(
+        &'static self,
+        loader: &dyn FileLoader,
+        device: Handle,
+        path: &str,
+    ) -> Option<LoadedImageData> {
+        let origin = ImageOrigin {
+            parent: 0,
+            device_handle: device,
+            file_path: Some(file_path_device_path(path)?),
+        };
+        self.load_image_with_origin(loader, origin)
     }
 
     /// Like [`load_image`](Self::load_image), but for an image whose parent image and device of

@@ -87,6 +87,29 @@ impl EfiProtocol for VendorMediaDevicePath {
     }
 }
 
+/// Returns a device path that consists of a file path media device path node for `path`, or None
+/// if `path` is too long to fit in a device path node.
+pub(crate) fn file_path_device_path(path: &str) -> Option<Box<[u8]>> {
+    let name: Vec<u16> = path.encode_utf16().chain([0]).collect();
+    let size = u16::try_from(size_of::<DevicePath>() + name.len() * size_of::<u16>()).ok()?;
+
+    let mut dp = Vec::with_capacity(size as usize + size_of::<DevicePath>());
+    dp.extend_from_slice(&[
+        DevicePathType::EFI_DEV_MEDIA.0,
+        DevicePathSubtype::EFI_DEV_MEDIA_FILE_PATH.0,
+    ]);
+    dp.extend_from_slice(&size.to_le_bytes());
+    for c in name {
+        dp.extend_from_slice(&c.to_le_bytes());
+    }
+    dp.extend_from_slice(&[
+        DevicePathType::EFI_DEV_END_PATH.0,
+        DevicePathSubtype::EFI_DEV_END_ENTIRE.0,
+    ]);
+    dp.extend_from_slice(&(size_of::<DevicePath>() as u16).to_le_bytes());
+    Some(dp.into_boxed_slice())
+}
+
 impl DevicePath {
     // Check whether this device path is a prefix of `other`
     // If so, return the number of bytes matched

@@ -18,6 +18,7 @@ use core::ffi::c_void;
 use core::mem::size_of_val;
 use core::ptr;
 use std::panic;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 
 /// A handle value that is never allocated by the firmware
@@ -893,6 +894,153 @@ fn load_image_from_simple_file_system_fails_gracefully() {
         assert_eq!(load_image_from_device_path(&efi, 0, &path), Err(status));
         assert_eq!(boot_services_data_pages(&efi), pages);
     }
+}
+
+/// The names of the addons that sidecar_entry() found, along with the status that LoadImage()
+/// returned for each of them
+static SIDECARS: Mutex<Vec<(String, Status)>> = Mutex::new(Vec::new());
+
+/// An image entry point that loads the addons in the "<FilePath>.extra.d" directory on the device
+/// that its loaded image protocol identifies, the way systemd-stub does: it opens the directory
+/// using the simple file system protocol of the device, and loads each "*.addon.efi" file in it via
+/// LoadImage(), passing a device path that consists of the device path of the device followed by a
+/// file path node. It records the outcome in SIDECARS.
+extern "efiapi" fn sidecar_entry(image_handle: Handle, system_table: *mut SystemTable) -> Status {
+    record_entry(image_handle, system_table);
+    // SAFETY: The system table pointer is the one passed to the entry point.
+    match panic::catch_unwind(|| unsafe { load_sidecars(image_handle, system_table) }) {
+        Ok(sidecars) => {
+            if let Ok(mut s) = SIDECARS.lock() {
+                *s = sidecars;
+            }
+            Status::EFI_SUCCESS
+        }
+        Err(_) => Status::EFI_ABORTED,
+    }
+}
+
+/// See sidecar_entry()
+///
+/// # Safety
+///
+/// `system_table` must be the system table pointer passed to the entry point of the image with
+/// handle `image_handle`.
+unsafe fn load_sidecars(
+    image_handle: Handle,
+    system_table: *mut SystemTable,
+) -> Vec<(String, Status)> {
+    // SAFETY: The caller guarantees that the system table pointer is valid, and so is the boot
+    // services table that it points to. All other pointers are either provided by the EFI runtime,
+    // or point to local variables.
+    unsafe {
+        let bs = ptr::read((*system_table).boot_services);
+        let protocol = |handle: Handle, guid: &Guid| {
+            let mut interface = ptr::null_mut();
+            let status = (bs.handle_protocol)(handle, guid, &mut interface);
+            assert_eq!(status, Status::EFI_SUCCESS);
+            interface
+        };
+
+        // The loaded image protocol identifies the device and the file path of the image
+        let li = protocol(image_handle, &EFI_LOADED_IMAGE_PROTOCOL_GUID);
+        let li = ptr::read(li.cast::<LoadedImageProtocol>());
+        let file_path = device_path_bytes(li.file_path);
+        assert_eq!(file_path[..2], [MEDIA_DEVICE_PATH, MEDIA_FILEPATH_DP]);
+        let dir = format!("{}.extra.d", utf16_to_string(&file_path[4..]));
+
+        // Collect the names of the addons in the directory
+        let sfs = protocol(li.device_handle, &EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID);
+        let sfs = sfs.cast::<SimpleFileSystemProtocol>();
+        let mut root = ptr::null_mut();
+        assert_eq!(((*sfs).open_volume)(sfs, &mut root), Status::EFI_SUCCESS);
+        let mut handle = ptr::null_mut();
+        let name = utf16z(&dir);
+        let status = ((*root).open)(root, &mut handle, name.as_ptr(), EFI_FILE_MODE_READ, 0);
+        assert_eq!(status, Status::EFI_SUCCESS);
+        let mut addons = Vec::new();
+        loop {
+            let mut buf = [0u8; 1024];
+            let mut size = buf.len();
+            let status = ((*handle).read)(handle, &mut size, buf.as_mut_ptr().cast());
+            assert_eq!(status, Status::EFI_SUCCESS);
+            if size == 0 {
+                break;
+            }
+            let (_, name) = parse_file_info(&buf[..size]);
+            if name.ends_with(".addon.efi") {
+                addons.push(name);
+            }
+        }
+        ((*handle).close)(handle);
+        ((*root).close)(root);
+
+        // Load each of them via a device path
+        let device = protocol(li.device_handle, &EFI_DEVICE_PATH_PROTOCOL_GUID);
+        let device = device_path_bytes(device.cast());
+        let device = &device[..device.len() - END_NODE.len()];
+        addons
+            .into_iter()
+            .map(|name| {
+                let file = file_path_node(&format!("{dir}\\{name}"));
+                let path = [device, &file, &END_NODE].concat();
+                let mut addon = 0;
+                let status = (bs.load_image)(
+                    0,
+                    image_handle,
+                    path.as_ptr().cast_mut().cast(),
+                    ptr::null_mut(),
+                    0,
+                    &mut addon,
+                );
+                if status == Status::EFI_SUCCESS {
+                    assert_eq!((bs.unload_image)(addon), Status::EFI_SUCCESS);
+                }
+                (name, status)
+            })
+            .collect()
+    }
+}
+
+/// EfiContext::load_image_with_file_path() records the device and the file path that it is passed
+/// in the loaded image protocol of the image, so that the image can load other files relative to
+/// its own location, e.g., the addons that systemd-stub loads from its "<FilePath>.extra.d"
+/// directory.
+#[test]
+fn image_can_load_files_relative_to_its_file_path() {
+    let efi = setup();
+    reset();
+
+    let archive = Cpio::default()
+        .file(
+            "EFI/Linux/uki.efi.extra.d/a.addon.efi",
+            &pe_image(returning_entry),
+        )
+        .file("EFI/Linux/uki.efi.extra.d/b.addon.efi", b"not an image")
+        .file("EFI/Linux/uki.efi.extra.d/c.cred", b"credential")
+        .finish();
+    let volume = efi.install_cpio_volume(archive);
+    let image = MemFile(pe_image(sidecar_entry));
+    let mut li = efi
+        .context()
+        .load_image_with_file_path(&image, volume, "\\EFI\\Linux\\uki.efi")
+        .unwrap();
+
+    let info = loaded_image(&efi, li.image_handle);
+    assert_eq!(info.parent_handle, 0);
+    assert_eq!(info.device_handle, volume);
+    assert_eq!(
+        recorded_file_path(&info),
+        Some([&file_path_node("\\EFI\\Linux\\uki.efi")[..], &END_NODE].concat())
+    );
+
+    assert_eq!(li.start_image(), Status::EFI_SUCCESS);
+    assert_eq!(
+        *SIDECARS.lock().unwrap(),
+        [
+            ("a.addon.efi".to_string(), Status::EFI_SUCCESS),
+            ("b.addon.efi".to_string(), Status::EFI_LOAD_ERROR),
+        ]
+    );
 }
 
 /// LoadImage() returns EFI_LOAD_ERROR if the "Image was not loaded because the image format was
