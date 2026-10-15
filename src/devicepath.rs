@@ -2,6 +2,7 @@
 // Copyright 2022-2023 Google LLC
 // Author: Ard Biesheuvel <ardb@google.com>
 
+use crate::EfiProtocol;
 use crate::{guid, Guid};
 use alloc::boxed::Box;
 use core::mem::size_of;
@@ -48,6 +49,40 @@ impl Copy for DevicePath {}
 pub struct VendorMedia {
     pub header: DevicePath,
     pub vendor_guid: Guid,
+}
+
+/// A device path that consists of a single vendor defined media device path node, which identifies
+/// the device by means of a GUID
+#[repr(C)]
+pub(crate) struct VendorMediaDevicePath {
+    vendor: VendorMedia,
+    end: DevicePath,
+}
+
+impl VendorMediaDevicePath {
+    pub(crate) fn new(vendor_guid: &Guid) -> Self {
+        VendorMediaDevicePath {
+            vendor: VendorMedia {
+                header: DevicePath {
+                    _type: DevicePathType::EFI_DEV_MEDIA,
+                    subtype: DevicePathSubtype::EFI_DEV_MEDIA_VENDOR,
+                    size: size_of::<VendorMedia>() as u16,
+                },
+                vendor_guid: *vendor_guid,
+            },
+            end: DevicePath {
+                _type: DevicePathType::EFI_DEV_END_PATH,
+                subtype: DevicePathSubtype::EFI_DEV_END_ENTIRE,
+                size: size_of::<DevicePath>() as u16,
+            },
+        }
+    }
+}
+
+impl EfiProtocol for VendorMediaDevicePath {
+    fn guid(&self) -> &'static Guid {
+        &EFI_DEVICE_PATH_PROTOCOL_GUID
+    }
 }
 
 impl DevicePath {

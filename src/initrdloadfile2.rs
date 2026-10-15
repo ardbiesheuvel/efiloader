@@ -2,9 +2,7 @@
 // Copyright 2022-2023 Google LLC
 // Author: Ard Biesheuvel <ardb@google.com>
 
-use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
-use crate::devicepath::{DevicePath, VendorMedia};
-use crate::devicepath::{DevicePathSubtype, DevicePathType};
+use crate::devicepath::{DevicePath, DevicePathType, VendorMediaDevicePath};
 use crate::EfiContext;
 use crate::EfiProtocol;
 use crate::FileLoader;
@@ -34,18 +32,6 @@ pub struct EfiLoadFile2 {
 impl EfiProtocol for EfiLoadFile2 {
     fn guid(&self) -> &'static Guid {
         &EFI_LOAD_FILE2_PROTOCOL_GUID
-    }
-}
-
-#[repr(C)]
-struct InitrdDevicePath {
-    vendor: VendorMedia,
-    end: DevicePath,
-}
-
-impl EfiProtocol for InitrdDevicePath {
-    fn guid(&self) -> &'static Guid {
-        &EFI_DEVICE_PATH_PROTOCOL_GUID
     }
 }
 
@@ -113,21 +99,7 @@ pub(crate) fn install(ctx: &EfiContext, loader: impl FileLoader + Send + 'static
         load_file,
         loader: Box::new(loader),
     };
-    let dp = InitrdDevicePath {
-        vendor: VendorMedia {
-            header: DevicePath {
-                _type: DevicePathType::EFI_DEV_MEDIA,
-                subtype: DevicePathSubtype::EFI_DEV_MEDIA_VENDOR,
-                size: size_of::<VendorMedia>() as u16,
-            },
-            vendor_guid: LINUX_EFI_INITRD_MEDIA_GUID,
-        },
-        end: DevicePath {
-            _type: DevicePathType::EFI_DEV_END_PATH,
-            subtype: DevicePathSubtype::EFI_DEV_END_ENTIRE,
-            size: size_of::<DevicePath>() as u16,
-        },
-    };
+    let dp = VendorMediaDevicePath::new(&LINUX_EFI_INITRD_MEDIA_GUID);
     // Installing the protocols cannot fail, given that the handle is new
     let handle = new_handle();
     let _ = ctx.install_pinned_protocol(handle, Box::pin(lf), ProtocolOwner::Runtime);
