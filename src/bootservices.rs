@@ -1125,7 +1125,7 @@ extern "efiapi" fn protocols_per_handle(
     protocol_buffer: *mut *const *const Guid,
     protocol_buffer_count: *mut usize,
 ) -> Status {
-    if protocol_buffer.is_null() || protocol_buffer_count.is_null() {
+    if handle == 0 || protocol_buffer.is_null() || protocol_buffer_count.is_null() {
         return Status::EFI_INVALID_PARAMETER;
     }
 
@@ -1144,6 +1144,11 @@ extern "efiapi" fn protocols_per_handle(
         .filter(|k| k.0 == handle)
         .map(|k| EFI.persistent_guid(&k.1))
         .collect();
+
+    // Handles only exist for as long as they carry at least one protocol
+    if guids.is_empty() {
+        return Status::EFI_INVALID_PARAMETER;
+    }
 
     let ret = if let Ok(buf) = EFI
         .memmap

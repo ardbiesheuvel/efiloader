@@ -1561,7 +1561,6 @@ fn protocols_per_handle_rejects_null_pointers() {
 /// ProtocolsPerHandle() returns EFI_INVALID_PARAMETER if "Handle is NULL" or "Handle is not a valid
 /// EFI_HANDLE".
 #[test]
-#[ignore = "efiloader returns an empty list"]
 fn protocols_per_handle_rejects_invalid_handle() {
     let efi = setup();
     let bs = efi.bs();
