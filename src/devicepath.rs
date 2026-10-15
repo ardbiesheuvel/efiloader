@@ -3,6 +3,7 @@
 // Author: Ard Biesheuvel <ardb@google.com>
 
 use crate::{guid, Guid};
+use alloc::boxed::Box;
 use core::mem::size_of;
 
 pub const EFI_DEVICE_PATH_PROTOCOL_GUID: Guid = guid!(
@@ -125,5 +126,14 @@ impl DevicePath {
             // another node at offset `len`.
             node = unsafe { &*((node as *const Self as *const u8).add(len) as *const Self) };
         }
+    }
+
+    /// Returns a copy of the device path, including its end node, or None if it contains a node
+    /// that does not cover its own header.
+    pub(crate) fn duplicate(&self) -> Option<Box<[u8]>> {
+        let size = self.size()?;
+        // SAFETY: size() returns the size of the entire device path, which covers `size` bytes.
+        let bytes = unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, size) };
+        Some(Box::from(bytes))
     }
 }

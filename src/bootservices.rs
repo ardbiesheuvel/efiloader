@@ -935,13 +935,10 @@ extern "efiapi" fn load_image(
     // SAFETY: The UEFI spec requires `device_path` to be NULL or point to a valid device path.
     let device_path = match unsafe { device_path.as_ref() } {
         Some(dp) => {
-            let Some(size) = dp.size() else {
+            let Some(copy) = dp.duplicate() else {
                 return Status::EFI_INVALID_PARAMETER;
             };
-            // SAFETY: `dp` points to a device path of `size` bytes.
-            Some(Box::from(unsafe {
-                slice::from_raw_parts(dp as *const _ as *const u8, size)
-            }))
+            Some(copy)
         }
         None => None,
     };
