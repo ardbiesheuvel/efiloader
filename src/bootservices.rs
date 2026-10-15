@@ -982,9 +982,7 @@ extern "efiapi" fn start_image(
         // instances installed by LoadedImageData::new(), which are pinned, and never uninstalled.
         let li = unsafe { &*(proto.as_proto_ptr() as *const EfiLoadedImage) };
         drop(db);
-        let ret = li.start_image();
-        // TODO ensure that we cannot restart an image after it has exited
-        ret
+        li.start_image()
     } else {
         Status::EFI_INVALID_PARAMETER
     }

@@ -474,7 +474,6 @@ fn start_image_rejects_invalid_image_handle() {
 /// StartImage() returns EFI_INVALID_PARAMETER if "... the image has already been initialized with
 /// StartImage": "The image may only be started one time."
 #[test]
-#[ignore = "efiloader permits images to be started more than once"]
 fn start_image_rejects_started_image() {
     let efi = setup();
     reset();

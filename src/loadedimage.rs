@@ -75,6 +75,8 @@ pub struct EfiLoadedImage {
     ctx: &'static EfiContext,
     image_handle: Handle,
     entrypoint: *const u8,
+    /// Whether the image has been started, which may only happen once
+    started: Cell<bool>,
     // Pointers to this instance are held by LoadedImageData and by EFI images, so it must not be
     // moved, and references to it must not be assumed to be unique
     pin: PhantomPinned,
@@ -148,6 +150,7 @@ impl LoadedImageData {
             ctx: ctx,
             image_handle: handle,
             entrypoint: pe_image.entry_point(),
+            started: Cell::new(false),
             pin: PhantomPinned,
         });
         let p = &*li as *const EfiLoadedImage;
@@ -191,9 +194,10 @@ impl EfiLoadedImage {
     pub fn start_image(&self) -> Status {
         const EFI_STACK_SIZE: usize = 128 * 1024;
 
-        // Starting an image that is already running would clobber the stack pointer that
-        // Exit() relies on to return from it
-        if self.reserved.get() != 0 {
+        // Images may only be started once. This also prevents an image that is running from being
+        // started again, which would clobber the stack pointer that Exit() relies on to return
+        // from it.
+        if self.started.get() {
             return Status::EFI_INVALID_PARAMETER;
         }
 
@@ -208,6 +212,7 @@ impl EfiLoadedImage {
             s.unwrap().as_ptr()
         };
 
+        self.started.set(true);
         let previous = CURRENT_IMAGE.swap(self.image_handle, Ordering::Relaxed);
         // SAFETY: `stack` points to a 16 byte aligned pool allocation of EFI_STACK_SIZE bytes, and
         // so offsetting it by EFI_STACK_SIZE produces a suitably aligned pointer to the top of the
