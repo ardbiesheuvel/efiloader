@@ -216,17 +216,89 @@ fn load_image_records_parent_image_handle() {
 }
 
 /// LoadImage() installs the EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL onto the image handle, alongside
-/// the loaded image protocol.
+/// the loaded image protocol. If no device path was passed to LoadImage(), its interface is NULL.
 #[test]
-#[ignore = "efiloader does not install EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL"]
 fn load_image_installs_loaded_image_device_path_protocol() {
     let efi = setup();
 
     let handle = efi.load_image(&pe_image(returning_entry)).unwrap();
-    assert!(
-        efi.handle_protocol(handle, &EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID)
-            .is_ok()
+    assert_eq!(
+        efi.handle_protocol(handle, &EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID),
+        Ok(ptr::null_mut())
     );
+}
+
+/// LoadImage() initializes the EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL with a copy of the DevicePath
+/// that was passed to it.
+#[test]
+fn load_image_installs_copy_of_device_path() {
+    let efi = setup();
+    let bs = efi.bs();
+
+    let image = pe_image(returning_entry);
+    let nodes = [vendor_node(&new_guid()), vendor_node(&new_guid())];
+    let path = device_path(&[&nodes[0], &nodes[1]]);
+    let mut handle = 0;
+    // SAFETY: All pointers are valid, and `image` is a buffer of `image.len()` bytes.
+    let status = unsafe {
+        (bs.load_image)(
+            0,
+            efi.image_handle(),
+            path,
+            image.as_ptr() as *mut c_void,
+            image.len(),
+            &mut handle,
+        )
+    };
+    assert_eq!(status, Status::EFI_SUCCESS);
+
+    let copy = efi
+        .handle_protocol(handle, &EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID)
+        .unwrap();
+    assert!(!copy.is_null());
+    assert_ne!(copy, path.cast());
+    // Two vendor-defined device path nodes of 20 bytes each, followed by the end node
+    let size = 2 * 20 + 4;
+    // SAFETY: Both device paths consist of `size` bytes.
+    unsafe {
+        assert_eq!(
+            core::slice::from_raw_parts(copy.cast::<u8>(), size),
+            core::slice::from_raw_parts(path.cast::<u8>(), size)
+        );
+    }
+}
+
+/// LoadImage() returns EFI_INVALID_PARAMETER if "One or more parametes are invalid", e.g., if
+/// DevicePath contains a node whose length does not even cover its header.
+#[test]
+fn load_image_rejects_malformed_device_path() {
+    let efi = setup();
+    let bs = efi.bs();
+
+    let image = pe_image(returning_entry);
+    let malformed: &mut [u8] = Box::leak(Box::new([
+        HARDWARE_DEVICE_PATH,
+        HW_VENDOR_DP,
+        0,
+        0,
+        END_DEVICE_PATH_TYPE,
+        END_ENTIRE_DEVICE_PATH_SUBTYPE,
+        4,
+        0,
+    ]));
+    let mut handle = 0;
+    // SAFETY: All pointers are valid, and `image` is a buffer of `image.len()` bytes.
+    let status = unsafe {
+        (bs.load_image)(
+            0,
+            efi.image_handle(),
+            malformed.as_mut_ptr().cast(),
+            image.as_ptr() as *mut c_void,
+            image.len(),
+            &mut handle,
+        )
+    };
+    assert_eq!(status, Status::EFI_INVALID_PARAMETER);
 }
 
 /// LoadImage() returns EFI_INVALID_PARAMETER if "ImageHandle is NULL".

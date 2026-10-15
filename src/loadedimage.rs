@@ -32,6 +32,13 @@ pub const LINUX_EFI_LOADED_IMAGE_RAND_GUID: Guid = guid!(
     [0xb6, 0xbb, 0x97, 0x86, 0x48, 0xc1, 0x89, 0x0a]
 );
 
+pub const EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID: Guid = guid!(
+    0xbc62157e,
+    0x3e33,
+    0x4fec,
+    [0x99, 0x20, 0x2d, 0x3b, 0x36, 0xd7, 0x50, 0xdf]
+);
+
 const EFI_LOADED_IMAGE_PROTOCOL_REVISION: u32 = 0x1000;
 
 /// The handle of the image that is currently running, or 0 if none is
@@ -88,6 +95,22 @@ struct RandomizedImage;
 impl EfiProtocol for RandomizedImage {
     fn guid(&self) -> &'static Guid {
         &LINUX_EFI_LOADED_IMAGE_RAND_GUID
+    }
+}
+
+/// The loaded image device path protocol instance of an image loaded by LoadImage(), which carries
+/// a copy of the device path that was passed to LoadImage(), if any.
+pub(crate) struct LoadedImageDevicePath(pub(crate) Option<Box<[u8]>>);
+
+impl EfiProtocol for LoadedImageDevicePath {
+    fn as_proto_ptr(&self) -> *const () {
+        self.0
+            .as_ref()
+            .map_or(ptr::null(), |dp| dp.as_ptr() as *const ())
+    }
+
+    fn guid(&self) -> &'static Guid {
+        &EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID
     }
 }
 

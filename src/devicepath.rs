@@ -104,4 +104,26 @@ impl DevicePath {
     pub(crate) fn equals(&self, other: &DevicePath) -> bool {
         self.is_prefix_of(other).is_some() && other.is_prefix_of(self).is_some()
     }
+
+    /// Returns the size of the device path, including its end node, or None if it contains a node
+    /// that does not cover its own header.
+    pub(crate) fn size(&self) -> Option<usize> {
+        let mut size = 0;
+        let mut node = self;
+        loop {
+            let len = node.size as usize;
+            if len < size_of::<DevicePath>() {
+                return None;
+            }
+            size += len;
+            if node._type == DevicePathType::EFI_DEV_END_PATH
+                && node.subtype == DevicePathSubtype::EFI_DEV_END_ENTIRE
+            {
+                return Some(size);
+            }
+            // SAFETY: `node` is not the end node of the device path, and so it is followed by
+            // another node at offset `len`.
+            node = unsafe { &*((node as *const Self as *const u8).add(len) as *const Self) };
+        }
+    }
 }

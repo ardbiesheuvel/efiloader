@@ -11,7 +11,7 @@ use crate::{Bool, Char16, Event, EventNotify, Guid, Handle, PhysicalAddress, Tpl
 use crate::{ProtocolDb, ProtocolEntry, ProtocolOwner, TPL_APPLICATION, UEFI_REVISION};
 
 use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
-use crate::loadedimage::{current_image, exit_image};
+use crate::loadedimage::{current_image, exit_image, LoadedImageDevicePath};
 use crate::new_handle;
 use crate::EfiLoadedImage;
 use crate::EFI;
@@ -930,12 +930,33 @@ extern "efiapi" fn load_image(
         return Status::EFI_UNSUPPORTED;
     }
 
+    // Take a copy of the device path, if any, for the loaded image device path protocol
+    // SAFETY: The UEFI spec requires `device_path` to be NULL or point to a valid device path.
+    let device_path = match unsafe { device_path.as_ref() } {
+        Some(dp) => {
+            let Some(size) = dp.size() else {
+                return Status::EFI_INVALID_PARAMETER;
+            };
+            // SAFETY: `dp` points to a device path of `size` bytes.
+            Some(Box::from(unsafe {
+                slice::from_raw_parts(dp as *const _ as *const u8, size)
+            }))
+        }
+        None => None,
+    };
+
     let ldr = LoadImageFileLoader {
         source_buffer,
         source_size,
     };
 
     if let Some(li) = EFI.load_child_image(&ldr, parent_image_handle) {
+        // This cannot fail, given that the image handle is new
+        let _ = EFI.install_pinned_protocol(
+            li.image_handle,
+            Box::pin(LoadedImageDevicePath(device_path)),
+            ProtocolOwner::Runtime,
+        );
         // SAFETY: `image_handle` is not NULL, and the UEFI spec requires it to point to a writable
         // EFI_HANDLE.
         unsafe {
