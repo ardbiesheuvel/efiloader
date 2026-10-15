@@ -1757,7 +1757,6 @@ fn install_multiple_protocol_interfaces_rejects_duplicate_protocol() {
 /// present in the handle database, then no protocols are installed onto Handle, and
 /// EFI_ALREADY_STARTED is returned."
 #[test]
-#[ignore = "efiloader returns EFI_INVALID_PARAMETER"]
 fn install_multiple_protocol_interfaces_rejects_duplicate_device_path() {
     let efi = setup();
     let bs = efi.bs();
@@ -1784,7 +1783,7 @@ fn install_multiple_protocol_interfaces_rejects_duplicate_device_path() {
             ptr::null::<Guid>(),
         )
     };
-    assert_eq!(status, EFI_ALREADY_STARTED);
+    assert_eq!(status, Status::EFI_ALREADY_STARTED);
     assert_eq!(
         efi.locate_handles(BY_PROTOCOL, Some(&guid)),
         Err(Status::EFI_NOT_FOUND)

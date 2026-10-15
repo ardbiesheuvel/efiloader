@@ -29,6 +29,7 @@ impl Status {
     pub const EFI_ACCESS_DENIED: Status = Status(15 + EFI_ERROR_BASE);
     pub const EFI_NO_MAPPING: Status = Status(17 + EFI_ERROR_BASE);
     pub const EFI_TIMEOUT: Status = Status(18 + EFI_ERROR_BASE);
+    pub const EFI_ALREADY_STARTED: Status = Status(20 + EFI_ERROR_BASE);
     pub const EFI_ABORTED: Status = Status(21 + EFI_ERROR_BASE);
     pub const EFI_SECURITY_VIOLATION: Status = Status(26 + EFI_ERROR_BASE);
 }
@@ -51,6 +52,7 @@ impl fmt::Debug for Status {
             Status::EFI_ACCESS_DENIED => "EFI_ACCESS_DENIED",
             Status::EFI_NO_MAPPING => "EFI_NO_MAPPING",
             Status::EFI_TIMEOUT => "EFI_TIMEOUT",
+            Status::EFI_ALREADY_STARTED => "EFI_ALREADY_STARTED",
             Status::EFI_ABORTED => "EFI_ABORTED",
             Status::EFI_SECURITY_VIOLATION => "EFI_SECURITY_VIOLATION",
             Status(s) => return write!(f, "Status({s:#x})"),

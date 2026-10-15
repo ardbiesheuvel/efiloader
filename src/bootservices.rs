@@ -1321,7 +1321,7 @@ extern "efiapi" fn install_multiple_protocol_interfaces(
                 devpath.equals(dp)
             }
         }) {
-            return Status::EFI_INVALID_PARAMETER;
+            return Status::EFI_ALREADY_STARTED;
         }
     }
 

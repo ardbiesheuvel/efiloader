@@ -42,9 +42,6 @@ pub type PhysicalAddress = u64;
 pub type Event = *mut c_void;
 pub type EventNotify = unsafe extern "efiapi" fn(Event, *mut c_void);
 
-/// EFI_STATUS codes that efiloader does not define
-pub const EFI_ALREADY_STARTED: Status = Status((1 << (usize::BITS - 1)) | 20);
-
 pub const EFI_PAGE_SIZE: usize = 4096;
 pub const PAGE: u64 = EFI_PAGE_SIZE as u64;
 
