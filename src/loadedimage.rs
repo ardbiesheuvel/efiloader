@@ -4,10 +4,12 @@
 
 use crate::efi_system_table;
 use crate::guid;
+use crate::memmap;
 use crate::new_handle;
 use crate::EfiContext;
 use crate::EfiProtocol;
 use crate::PeImage;
+use crate::ProtocolDb;
 use crate::ProtocolOwner;
 use crate::{memorytype::*, status::*, systemtable::*, Char16, Guid, Handle};
 
@@ -80,8 +82,8 @@ pub struct EfiLoadedImage {
     /// The size of and the pointer to the exit data that the image passed to Exit(), if any, which
     /// StartImage() passes back to its caller
     pub(crate) exit_data: Cell<(usize, *mut Char16)>,
-    // Pointers to this instance are held by LoadedImageData and by EFI images, so it must not be
-    // moved, and references to it must not be assumed to be unique
+    // EFI images hold pointers to this instance, so it must not be moved, and references to it
+    // must not be assumed to be unique
     pin: PhantomPinned,
 }
 
@@ -121,8 +123,18 @@ impl EfiProtocol for LoadedImageDevicePath {
 
 pub struct LoadedImageData {
     pub image_handle: Handle,
-    loaded_image: *const EfiLoadedImage,
+    ctx: &'static EfiContext,
     load_options: Vec<u16>,
+}
+
+/// Returns a pointer to the loaded image protocol instance of the image with handle `handle`, if
+/// it is an image that was loaded by the EFI runtime. (Loaded image protocols installed by EFI
+/// images are not EfiLoadedImage instances.) The instance remains valid until the image is
+/// unloaded, which only happens to images that have not been started.
+pub(crate) fn find_loaded_image(db: &ProtocolDb, handle: Handle) -> Option<*const EfiLoadedImage> {
+    db.get(&(handle, EFI_LOADED_IMAGE_PROTOCOL_GUID))
+        .filter(|p| p.owner == ProtocolOwner::Runtime)
+        .map(|p| p.as_proto_ptr() as *const EfiLoadedImage)
 }
 
 impl LoadedImageData {
@@ -157,13 +169,12 @@ impl LoadedImageData {
             exit_data: Cell::new((0, ptr::null_mut())),
             pin: PhantomPinned,
         });
-        let p = &*li as *const EfiLoadedImage;
 
         ctx.install_pinned_protocol(handle, li, ProtocolOwner::Runtime)
             .ok()?;
         let lid = LoadedImageData {
             image_handle: handle,
-            loaded_image: p,
+            ctx: ctx,
             load_options: Vec::new(),
         };
         if randomized {
@@ -177,20 +188,26 @@ impl LoadedImageData {
         Some(lid)
     }
 
-    fn loaded_image(&self) -> &EfiLoadedImage {
-        // SAFETY: `loaded_image` points to the pinned EfiLoadedImage that new() installed into the
-        // protocol database as a runtime owned entry, which is never uninstalled. Only shared
-        // references to it are ever created, given that EFI images hold pointers to it too.
-        unsafe { &*self.loaded_image }
+    /// Invokes `f` on the loaded image protocol instance of the image, and returns the result,
+    /// unless the image has been unloaded, in which case None is returned.
+    fn with_loaded_image<R>(&self, f: impl FnOnce(&EfiLoadedImage) -> R) -> Option<R> {
+        let li = find_loaded_image(&self.ctx.protocol_db.borrow(), self.image_handle)?;
+        // SAFETY: `li` points to the pinned EfiLoadedImage that new() installed into the protocol
+        // database as a runtime owned entry, which is only uninstalled when the image is unloaded.
+        // This cannot happen while `f` runs: either `f` does not call into the EFI runtime, or it
+        // starts the image, after which it can no longer be unloaded. Only shared references to
+        // the instance are ever created, given that EFI images hold pointers to it too.
+        Some(f(unsafe { &*li }))
     }
 }
 
 impl Drop for LoadedImageData {
     fn drop(&mut self) {
         // The load options are about to be freed
-        let loaded_image = self.loaded_image();
-        loaded_image.load_options.set(ptr::null());
-        loaded_image.load_options_size.set(0);
+        self.with_loaded_image(|li| {
+            li.load_options.set(ptr::null());
+            li.load_options_size.set(0);
+        });
     }
 }
 
@@ -244,16 +261,56 @@ impl LoadedImageData {
     pub fn set_load_options(&mut self, load_options: Vec<u16>) {
         self.load_options = load_options;
 
-        let c = &self.load_options;
-        let loaded_image = self.loaded_image();
-        loaded_image.load_options.set(c.as_ptr() as *const ());
-        loaded_image
-            .load_options_size
-            .set((c.len() * core::mem::size_of::<u16>()) as u32);
+        let p = self.load_options.as_ptr() as *const ();
+        let size = (self.load_options.len() * core::mem::size_of::<u16>()) as u32;
+        self.with_loaded_image(|li| {
+            li.load_options.set(p);
+            li.load_options_size.set(size);
+        });
     }
 
     pub fn start_image(&mut self) -> Status {
-        self.loaded_image().start_image()
+        // Images that have been unloaded no longer exist
+        self.with_loaded_image(|li| li.start_image())
+            .unwrap_or(Status::EFI_INVALID_PARAMETER)
+    }
+}
+
+impl EfiContext {
+    /// Unloads the image with handle `handle`, provided that it has not been started, by
+    /// uninstalling the protocols that the EFI runtime installed onto the image handle, and freeing
+    /// the memory occupied by the image. Returns EFI_INVALID_PARAMETER if `handle` is not the handle
+    /// of an image loaded by the EFI runtime, and EFI_UNSUPPORTED if the image has been started.
+    pub(crate) fn unload_image(&self, handle: Handle) -> Result<(), Status> {
+        let mut db = self.protocol_db.borrow_mut();
+        let li = find_loaded_image(&db, handle).ok_or(Status::EFI_INVALID_PARAMETER)?;
+        // SAFETY: `li` points to the EfiLoadedImage instance of the image, which remains valid
+        // until it is uninstalled below.
+        let (started, base, size) =
+            unsafe { ((*li).started.get(), (*li).image_base, (*li).image_size) };
+        if started {
+            return Err(Status::EFI_UNSUPPORTED);
+        }
+
+        // Uninstall the loaded image protocol, along with the other protocols that the EFI runtime
+        // installed onto the image handle. Protocols installed by others are left alone.
+        db.retain(|k, e| k.0 != handle || e.owner != ProtocolOwner::Runtime);
+        drop(db);
+
+        // Lift the restrictions on the permissions of the memory occupied by the image that were
+        // applied when it was loaded, and free it. If the former fails, leak the memory rather than
+        // hand it out again with restricted permissions.
+        let pages = memmap::size_to_pages(size as usize);
+        let range = base as usize..base as usize + (pages << EFI_PAGE_SHIFT);
+        if self
+            .mapper
+            .remap_range(&range, 0, EFI_MEMORY_RO | EFI_MEMORY_XP)
+            .is_ok()
+        {
+            // This cannot fail, given that the pages were allocated when the image was loaded
+            self.memmap.free_pages(base as u64, pages).ok();
+        }
+        Ok(())
     }
 }
 

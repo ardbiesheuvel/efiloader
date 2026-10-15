@@ -11,11 +11,9 @@ use crate::{Bool, Char16, Event, EventNotify, Guid, Handle, PhysicalAddress, Tpl
 use crate::{ProtocolDb, ProtocolEntry, ProtocolOwner, TPL_APPLICATION, UEFI_REVISION};
 
 use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
-use crate::loadedimage::{current_image, exit_image, LoadedImageDevicePath};
+use crate::loadedimage::{current_image, exit_image, find_loaded_image, LoadedImageDevicePath};
 use crate::new_handle;
-use crate::EfiLoadedImage;
 use crate::EFI;
-use crate::EFI_LOADED_IMAGE_PROTOCOL_GUID;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -543,8 +541,7 @@ fn handle_exists(db: &ProtocolDb, handle: Handle) -> bool {
 /// Returns whether `handle` is the handle of an image that was loaded by the EFI runtime. (Loaded
 /// image protocols installed by EFI images do not count.)
 fn is_image_handle(db: &ProtocolDb, handle: Handle) -> bool {
-    db.get(&(handle, EFI_LOADED_IMAGE_PROTOCOL_GUID))
-        .is_some_and(|p| p.owner == ProtocolOwner::Runtime)
+    find_loaded_image(db, handle).is_some()
 }
 
 /// Returns whether `interface` may be installed by an EFI image as a device path protocol
@@ -974,34 +971,30 @@ extern "efiapi" fn start_image(
     exit_data: *mut *mut Char16,
 ) -> Status {
     log::trace!("StartImage()");
-    let db = EFI.protocol_db.borrow();
-    let key = (handle, EFI_LOADED_IMAGE_PROTOCOL_GUID);
-    // Loaded image protocols installed by EFI images are not EfiLoadedImage instances
-    if let Some(proto) = db.get(&key).filter(|p| p.owner == ProtocolOwner::Runtime) {
-        // SAFETY: Loaded image protocol instances installed by the runtime are EfiLoadedImage
-        // instances installed by LoadedImageData::new(), which are pinned, and never uninstalled.
-        let li = unsafe { &*(proto.as_proto_ptr() as *const EfiLoadedImage) };
-        drop(db);
-        let ret = li.start_image();
+    let Some(li) = find_loaded_image(&EFI.protocol_db.borrow(), handle) else {
+        return Status::EFI_INVALID_PARAMETER;
+    };
+    // SAFETY: `li` points to the EfiLoadedImage instance of the image, which remains valid until
+    // the image is unloaded. EfiLoadedImage::start_image() marks the image as started before
+    // running it, after which it can no longer be unloaded.
+    let li = unsafe { &*li };
+    let ret = li.start_image();
 
-        // Pass back the exit data that the image passed to Exit(), if any. The caller is
-        // responsible for freeing it.
-        let (size, data) = li.exit_data.replace((0, ptr::null_mut()));
-        // SAFETY: The UEFI spec requires `exit_data_size` and `exit_data` to point to writable
-        // locations of the appropriate types, or to be NULL in the case of `exit_data`. Check both
-        // for NULL, as callers that are not interested in the exit data may pass NULL for both.
-        unsafe {
-            if !exit_data_size.is_null() {
-                *exit_data_size = size;
-            }
-            if !exit_data.is_null() {
-                *exit_data = data;
-            }
+    // Pass back the exit data that the image passed to Exit(), if any. The caller is
+    // responsible for freeing it.
+    let (size, data) = li.exit_data.replace((0, ptr::null_mut()));
+    // SAFETY: The UEFI spec requires `exit_data_size` and `exit_data` to point to writable
+    // locations of the appropriate types, or to be NULL in the case of `exit_data`. Check both
+    // for NULL, as callers that are not interested in the exit data may pass NULL for both.
+    unsafe {
+        if !exit_data_size.is_null() {
+            *exit_data_size = size;
         }
-        ret
-    } else {
-        Status::EFI_INVALID_PARAMETER
+        if !exit_data.is_null() {
+            *exit_data = data;
+        }
     }
+    ret
 }
 
 extern "efiapi" fn exit(
@@ -1012,39 +1005,48 @@ extern "efiapi" fn exit(
 ) -> Status {
     log::trace!("Exit()");
 
-    // Only the image that is currently running may exit
+    // Images that have not been started yet are unloaded
+    if EFI.unload_image(image_handle).is_ok() {
+        return Status::EFI_SUCCESS;
+    }
+
+    // Otherwise, only the image that is currently running may exit
     if image_handle != current_image() {
         return Status::EFI_INVALID_PARAMETER;
     }
 
-    let db = EFI.protocol_db.borrow();
-    let key = (image_handle, EFI_LOADED_IMAGE_PROTOCOL_GUID);
-    if let Some(proto) = db.get(&key).filter(|p| p.owner == ProtocolOwner::Runtime) {
-        // SAFETY: See start_image() regarding the validity of `li`.
-        let li = unsafe { &*(proto.as_proto_ptr() as *const EfiLoadedImage) };
-        // exit_image does not return, so we need to release
-        // the db spinlock explicitly
-        drop(db);
-        // Clear the recorded stack pointer, as exit_image() bypasses the code in start_image()
-        // that does so when the image returns normally
-        let sp = li.reserved.replace(0);
-        if sp != 0 {
-            // Record the exit data for StartImage() to pass back to its caller. The exit data is
-            // only valid if the exit status is not EFI_SUCCESS.
-            if exit_status != Status::EFI_SUCCESS && !exit_data.is_null() {
-                li.exit_data.set((exit_data_size, exit_data as *mut Char16));
-            }
-            // SAFETY: `sp` is the stack pointer that start_image() recorded when it entered the
-            // image, which is the one that is currently running, as checked above. exit_image()
-            // switches back to that stack, and returns `exit_status` from start_image().
-            unsafe { exit_image(exit_status, sp) };
+    // Note that exit_image() does not return, so the protocol database must not remain borrowed
+    let Some(li) = find_loaded_image(&EFI.protocol_db.borrow(), image_handle) else {
+        return Status::EFI_INVALID_PARAMETER;
+    };
+    // SAFETY: `li` points to the EfiLoadedImage instance of the image, which remains valid until
+    // the image is unloaded. It is the image that is currently running, and images that have been
+    // started are never unloaded.
+    let li = unsafe { &*li };
+    // Clear the recorded stack pointer, as exit_image() bypasses the code in start_image() that
+    // does so when the image returns normally
+    let sp = li.reserved.replace(0);
+    if sp != 0 {
+        // Record the exit data for StartImage() to pass back to its caller. The exit data is only
+        // valid if the exit status is not EFI_SUCCESS.
+        if exit_status != Status::EFI_SUCCESS && !exit_data.is_null() {
+            li.exit_data.set((exit_data_size, exit_data as *mut Char16));
         }
+        // SAFETY: `sp` is the stack pointer that start_image() recorded when it entered the image,
+        // which is the one that is currently running, as checked above. exit_image() switches back
+        // to that stack, and returns `exit_status` from start_image().
+        unsafe { exit_image(exit_status, sp) };
     }
     Status::EFI_INVALID_PARAMETER
 }
 
-extern "efiapi" fn unload_image(_image_handle: Handle) -> Status {
-    Status::EFI_UNSUPPORTED
+extern "efiapi" fn unload_image(image_handle: Handle) -> Status {
+    // Only images that have not been started yet can be unloaded, given that invoking the Unload()
+    // functions of images that have been started is not supported
+    match EFI.unload_image(image_handle) {
+        Ok(()) => Status::EFI_SUCCESS,
+        Err(status) => status,
+    }
 }
 
 extern "efiapi" fn exit_boot_services(_image_handle: Handle, map_key: usize) -> Status {

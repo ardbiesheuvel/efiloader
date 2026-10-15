@@ -2,8 +2,8 @@
 // Copyright 2026 Google LLC
 
 //! Tests for the image services described in section 7.4 of the UEFI specification: LoadImage(),
-//! StartImage() and Exit(). UnloadImage() is not covered, as efiloader does not implement it, and
-//! ExitBootServices() is covered by a separate test binary.
+//! StartImage(), Exit() and UnloadImage(). ExitBootServices() is covered by a separate test
+//! binary.
 //!
 //! The images that are loaded by these tests consist of a trampoline that branches into a Rust
 //! function in this file, which runs on the stack provided by StartImage(). These functions report
@@ -561,24 +561,118 @@ fn exit_rejects_handle_that_is_not_an_image() {
 /// EFI_BOOT_SERVICES.LoadImage() before calling EFI_BOOT_SERVICES.StartImage(). This will free the
 /// image from memory without having started it."
 #[test]
-#[ignore = "efiloader does not support unloading images"]
 fn exit_unloads_image_that_was_not_started() {
     let efi = setup();
     let bs = efi.bs();
     reset();
 
     let handle = efi.load_image(&pe_image(returning_entry)).unwrap();
+    let li = loaded_image(&efi, handle);
     // SAFETY: ExitData is NULL.
     let status = unsafe { (bs.exit)(handle, Status::EFI_ABORTED, 0, ptr::null_mut()) };
     assert_eq!(status, Status::EFI_SUCCESS);
+    assert_unloaded(&efi, handle, &li);
+}
 
-    // The image handle is no longer valid
-    assert_eq!(start_image(&efi, handle), Status::EFI_INVALID_PARAMETER);
+/// Checks that the image with handle `handle` and loaded image protocol `li` was unloaded, i.e.,
+/// that its handle is no longer valid, and that the memory it occupied was freed.
+fn assert_unloaded(efi: &Efi, handle: Handle, li: &LoadedImageProtocol) {
+    let bs = efi.bs();
+
+    assert_eq!(start_image(efi, handle), Status::EFI_INVALID_PARAMETER);
     assert!(
         efi.handle_protocol(handle, &EFI_LOADED_IMAGE_PROTOCOL_GUID)
             .is_err()
     );
+    assert!(
+        !efi.locate_handles(ALL_HANDLES, None)
+            .unwrap()
+            .contains(&handle)
+    );
     assert_eq!(ENTRY_COUNT.load(SeqCst), 0);
+
+    // The memory can be allocated and written to again
+    let base = li.image_base as u64;
+    let pages = li.image_size.div_ceil(PAGE);
+    assert_eq!(
+        efi.memory_map().type_of(base..base + pages * PAGE),
+        Some(EFI_CONVENTIONAL_MEMORY)
+    );
+    let mut memory = base;
+    // SAFETY: `memory` is a valid EFI_PHYSICAL_ADDRESS.
+    let status = unsafe {
+        (bs.allocate_pages)(
+            ALLOCATE_ADDRESS,
+            EFI_LOADER_DATA,
+            pages as usize,
+            &mut memory,
+        )
+    };
+    assert_eq!(status, Status::EFI_SUCCESS);
+    // SAFETY: The pages were just allocated.
+    unsafe { ptr::write_bytes(base as *mut u8, 0xaa, (pages * PAGE) as usize) };
+    // SAFETY: The pages are no longer used.
+    assert_eq!(
+        unsafe { (bs.free_pages)(base, pages as usize) },
+        Status::EFI_SUCCESS
+    );
+}
+
+/// UnloadImage() returns "EFI_SUCCESS: The image has been unloaded" for images that have not been
+/// started: "It is valid to call Exit() or Unload() for an image that was loaded by
+/// EFI_BOOT_SERVICES.LoadImage() before calling EFI_BOOT_SERVICES.StartImage()."
+#[test]
+fn unload_image_unloads_image_that_was_not_started() {
+    let efi = setup();
+    let bs = efi.bs();
+    reset();
+
+    let handle = efi.load_image(&pe_image(returning_entry)).unwrap();
+    let li = loaded_image(&efi, handle);
+    // SAFETY: UnloadImage() takes no pointer arguments.
+    let status = unsafe { (bs.unload_image)(handle) };
+    assert_eq!(status, Status::EFI_SUCCESS);
+    assert_unloaded(&efi, handle, &li);
+}
+
+/// UnloadImage() returns "EFI_INVALID_PARAMETER: ImageHandle is not a valid image handle".
+#[test]
+fn unload_image_rejects_invalid_image_handle() {
+    let efi = setup();
+    let bs = efi.bs();
+
+    let not_an_image = efi
+        .install_protocol(0, &new_guid(), new_interface())
+        .unwrap();
+    for handle in [0, BOGUS_HANDLE, not_an_image] {
+        // SAFETY: UnloadImage() takes no pointer arguments.
+        let status = unsafe { (bs.unload_image)(handle) };
+        assert_eq!(status, Status::EFI_INVALID_PARAMETER, "{handle:#x}");
+    }
+}
+
+/// An image entry point that calls UnloadImage() for its own image handle, and returns
+/// EFI_SUCCESS.
+extern "efiapi" fn unloading_entry(image_handle: Handle, system_table: *mut SystemTable) -> Status {
+    record_entry(image_handle, system_table);
+    // SAFETY: The system table pointer passed to the entry point is valid, and so is the boot
+    // services table pointer it holds.
+    let status = unsafe { ((*(*system_table).boot_services).unload_image)(image_handle) };
+    EXIT_RETURNED.store(status.0, SeqCst);
+    Status::EFI_SUCCESS
+}
+
+/// UnloadImage() returns "EFI_UNSUPPORTED: The image has been started, and does not support
+/// unload", which applies to an image that is running and has not registered an Unload() function.
+#[test]
+fn unload_image_rejects_started_image() {
+    let efi = setup();
+    reset();
+
+    let handle = efi.load_image(&pe_image(unloading_entry)).unwrap();
+    assert_eq!(start_image(&efi, handle), Status::EFI_SUCCESS);
+    assert_eq!(ENTRY_COUNT.load(SeqCst), 1);
+    assert_eq!(Status(EXIT_RETURNED.load(SeqCst)), Status::EFI_UNSUPPORTED);
 }
 
 static PARENT_IMAGE_HANDLE: AtomicUsize = AtomicUsize::new(0);
