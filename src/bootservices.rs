@@ -107,7 +107,7 @@ type InstallConfigurationTable = extern "efiapi" fn(*const Guid, *const ()) -> S
 
 type LoadImage =
     extern "efiapi" fn(Bool, Handle, *const DevicePath, *const (), usize, *mut Handle) -> Status;
-type StartImage = extern "efiapi" fn(Handle, *mut usize, *mut Char16) -> Status;
+type StartImage = extern "efiapi" fn(Handle, *mut usize, *mut *mut Char16) -> Status;
 type Exit = extern "efiapi" fn(Handle, Status, usize, *const Char16) -> Status;
 type UnloadImage = extern "efiapi" fn(Handle) -> Status;
 type ExitBootServices = extern "efiapi" fn(Handle, usize) -> Status;
@@ -970,8 +970,8 @@ extern "efiapi" fn load_image(
 
 extern "efiapi" fn start_image(
     handle: Handle,
-    _exit_data_size: *mut usize,
-    _exit_data: *mut Char16,
+    exit_data_size: *mut usize,
+    exit_data: *mut *mut Char16,
 ) -> Status {
     log::trace!("StartImage()");
     let db = EFI.protocol_db.borrow();
@@ -982,7 +982,23 @@ extern "efiapi" fn start_image(
         // instances installed by LoadedImageData::new(), which are pinned, and never uninstalled.
         let li = unsafe { &*(proto.as_proto_ptr() as *const EfiLoadedImage) };
         drop(db);
-        li.start_image()
+        let ret = li.start_image();
+
+        // Pass back the exit data that the image passed to Exit(), if any. The caller is
+        // responsible for freeing it.
+        let (size, data) = li.exit_data.replace((0, ptr::null_mut()));
+        // SAFETY: The UEFI spec requires `exit_data_size` and `exit_data` to point to writable
+        // locations of the appropriate types, or to be NULL in the case of `exit_data`. Check both
+        // for NULL, as callers that are not interested in the exit data may pass NULL for both.
+        unsafe {
+            if !exit_data_size.is_null() {
+                *exit_data_size = size;
+            }
+            if !exit_data.is_null() {
+                *exit_data = data;
+            }
+        }
+        ret
     } else {
         Status::EFI_INVALID_PARAMETER
     }
@@ -991,8 +1007,8 @@ extern "efiapi" fn start_image(
 extern "efiapi" fn exit(
     image_handle: Handle,
     exit_status: Status,
-    _exit_data_size: usize,
-    _exit_data: *const Char16,
+    exit_data_size: usize,
+    exit_data: *const Char16,
 ) -> Status {
     log::trace!("Exit()");
 
@@ -1013,6 +1029,11 @@ extern "efiapi" fn exit(
         // that does so when the image returns normally
         let sp = li.reserved.replace(0);
         if sp != 0 {
+            // Record the exit data for StartImage() to pass back to its caller. The exit data is
+            // only valid if the exit status is not EFI_SUCCESS.
+            if exit_status != Status::EFI_SUCCESS && !exit_data.is_null() {
+                li.exit_data.set((exit_data_size, exit_data as *mut Char16));
+            }
             // SAFETY: `sp` is the stack pointer that start_image() recorded when it entered the
             // image, which is the one that is currently running, as checked above. exit_image()
             // switches back to that stack, and returns `exit_status` from start_image().

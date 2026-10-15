@@ -506,7 +506,6 @@ fn exit_returns_to_start_image() {
 /// function is responsible for returning the ExitData buffer to the pool by calling
 /// EFI_BOOT_SERVICES.FreePool() when the buffer is no longer needed."
 #[test]
-#[ignore = "efiloader does not pass the exit data back to StartImage()"]
 fn exit_passes_exit_data_to_start_image() {
     let efi = setup();
     let bs = efi.bs();

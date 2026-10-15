@@ -9,7 +9,7 @@ use crate::EfiContext;
 use crate::EfiProtocol;
 use crate::PeImage;
 use crate::ProtocolOwner;
-use crate::{memorytype::*, status::*, systemtable::*, Guid, Handle};
+use crate::{memorytype::*, status::*, systemtable::*, Char16, Guid, Handle};
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -77,6 +77,9 @@ pub struct EfiLoadedImage {
     entrypoint: *const u8,
     /// Whether the image has been started, which may only happen once
     started: Cell<bool>,
+    /// The size of and the pointer to the exit data that the image passed to Exit(), if any, which
+    /// StartImage() passes back to its caller
+    pub(crate) exit_data: Cell<(usize, *mut Char16)>,
     // Pointers to this instance are held by LoadedImageData and by EFI images, so it must not be
     // moved, and references to it must not be assumed to be unique
     pin: PhantomPinned,
@@ -151,6 +154,7 @@ impl LoadedImageData {
             image_handle: handle,
             entrypoint: pe_image.entry_point(),
             started: Cell::new(false),
+            exit_data: Cell::new((0, ptr::null_mut())),
             pin: PhantomPinned,
         });
         let p = &*li as *const EfiLoadedImage;
