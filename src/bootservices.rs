@@ -11,6 +11,7 @@ use crate::{Bool, Char16, Event, EventNotify, Guid, Handle, PhysicalAddress, Tpl
 use crate::{ProtocolDb, ProtocolEntry, ProtocolOwner, TPL_APPLICATION, UEFI_REVISION};
 
 use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
+use crate::initrdloadfile2::EFI_LOAD_FILE2_PROTOCOL_GUID;
 use crate::loadedimage::{current_image, exit_image, find_loaded_image};
 use crate::loadedimage::{ImageOrigin, LoadedImageDevicePath};
 use crate::new_handle;
@@ -907,8 +908,112 @@ impl FileLoader for LoadImageFileLoader {
     }
 }
 
+/// EFI_LOAD_FILE2_PROTOCOL, as installed by any party, e.g., by an EFI image. Only its LoadFile()
+/// member is used.
+#[repr(C)]
+struct LoadFile2Protocol {
+    load_file: Option<
+        unsafe extern "efiapi" fn(
+            *mut LoadFile2Protocol,
+            *const DevicePath,
+            Bool,
+            *mut usize,
+            *mut (),
+        ) -> Status,
+    >,
+}
+
+/// A file loaded via LoadFile2, which is held in a buffer of EfiBootServicesData pages that is
+/// freed when the FileBuffer is dropped
+struct FileBuffer {
+    pages: &'static mut [MaybeUninit<u8>],
+    size: usize,
+}
+
+impl FileBuffer {
+    /// Allocates a buffer for a file of `size` bytes
+    fn new(size: usize) -> Option<Self> {
+        let pages = size.checked_add(EFI_PAGE_MASK)? >> EFI_PAGE_SHIFT;
+        let pages = EFI.memmap.allocate_pages(
+            pages,
+            EfiMemoryType::EfiBootServicesData,
+            Placement::Anywhere,
+        )?;
+        Some(FileBuffer { pages, size })
+    }
+
+    /// Returns a FileLoader that loads the file from the buffer
+    fn loader(&self) -> LoadImageFileLoader {
+        LoadImageFileLoader {
+            source_buffer: self.pages.as_ptr() as *const (),
+            source_size: self.size,
+        }
+    }
+}
+
+impl Drop for FileBuffer {
+    fn drop(&mut self) {
+        // This cannot fail, given that the pages were allocated by new()
+        let pages = self.pages.len() >> EFI_PAGE_SHIFT;
+        EFI.memmap
+            .free_pages(self.pages.as_ptr() as u64, pages)
+            .ok();
+    }
+}
+
+/// Loads the file that `file_path` refers to into a FileBuffer, using the LoadFile2 protocol that
+/// is installed on `handle`.
+fn load_file2(handle: Handle, file_path: &DevicePath) -> Result<FileBuffer, Status> {
+    let protocol = EFI
+        .protocol_db
+        .borrow()
+        .get(&(handle, EFI_LOAD_FILE2_PROTOCOL_GUID))
+        .map_or(ptr::null(), |p| p.as_proto_ptr()) as *mut LoadFile2Protocol;
+    // SAFETY: The interface pointer of a LoadFile2 protocol is either NULL or points to an
+    // EFI_LOAD_FILE2_PROTOCOL instance.
+    let Some(load_file) = unsafe { protocol.as_ref() }.and_then(|p| p.load_file) else {
+        return Err(Status::EFI_NOT_FOUND);
+    };
+
+    // Errors returned by LoadFile2 are passed on, but success and warning codes are not, given that
+    // they are only returned here if no file was loaded.
+    let error = |status: Status| {
+        if status.is_error() {
+            status
+        } else {
+            Status::EFI_LOAD_ERROR
+        }
+    };
+
+    // Query the size of the file, which LoadFile() returns along with EFI_BUFFER_TOO_SMALL if it
+    // is not passed a buffer. An empty file cannot be loaded as an image.
+    let mut size = 0;
+    // SAFETY: `load_file` is the LoadFile() member of `protocol`, which is passed a valid device
+    // path, and a pointer to a valid UINTN that indicates that no buffer is provided.
+    let status = unsafe { load_file(protocol, file_path, 0, &mut size, ptr::null_mut()) };
+    if status != Status::EFI_BUFFER_TOO_SMALL {
+        return Err(error(status));
+    }
+    if size == 0 {
+        return Err(Status::EFI_LOAD_ERROR);
+    }
+
+    let mut file = FileBuffer::new(size).ok_or(Status::EFI_OUT_OF_RESOURCES)?;
+    let buffer = file.pages.as_mut_ptr() as *mut ();
+    // SAFETY: `load_file` is the LoadFile() member of `protocol`, which is passed a valid device
+    // path, and a pointer to a valid UINTN that holds the size of `buffer`, which is valid for
+    // writes of that many bytes.
+    let status = unsafe { load_file(protocol, file_path, 0, &mut size, buffer) };
+    if status != Status::EFI_SUCCESS {
+        return Err(error(status));
+    }
+    // LoadFile() returns the number of bytes that it loaded into the buffer
+    file.size = file.size.min(size);
+    Ok(file)
+}
+
 extern "efiapi" fn load_image(
-    _boot_policy: Bool,
+    boot_policy: Bool,
     parent_image_handle: Handle,
     device_path: *const DevicePath,
     source_buffer: *const (),
@@ -920,15 +1025,10 @@ extern "efiapi" fn load_image(
     if image_handle.is_null() || !is_image_handle(&EFI.protocol_db.borrow(), parent_image_handle) {
         return Status::EFI_INVALID_PARAMETER;
     }
-    if source_buffer.is_null() {
-        // Loading images from a device path is not supported
-        return if device_path.is_null() {
-            Status::EFI_NOT_FOUND
-        } else {
-            Status::EFI_UNSUPPORTED
-        };
+    if source_buffer.is_null() && device_path.is_null() {
+        return Status::EFI_NOT_FOUND;
     }
-    if source_size == 0 {
+    if !source_buffer.is_null() && source_size == 0 {
         return Status::EFI_UNSUPPORTED;
     }
 
@@ -936,6 +1036,7 @@ extern "efiapi" fn load_image(
         parent: parent_image_handle,
         ..Default::default()
     };
+    let mut file = None;
 
     // Take a copy of the device path, if any, for the loaded image device path protocol
     // SAFETY: The UEFI spec requires `device_path` to be NULL or point to a valid device path.
@@ -945,15 +1046,36 @@ extern "efiapi" fn load_image(
                 return Status::EFI_INVALID_PARAMETER;
             };
 
+            let (device_handle, file_path) = if source_buffer.is_null() {
+                // Load the image file using the LoadFile2 protocol of the device that the device
+                // path refers to. (The UEFI spec gives precedence to the simple file system
+                // protocol, and falls back to the load file protocol, which is the only one that
+                // may be used if BootPolicy is TRUE, but neither of those is supported.)
+                if boot_policy != 0 {
+                    return Status::EFI_NOT_FOUND;
+                }
+                let found =
+                    find_device(&EFI.protocol_db.borrow(), &EFI_LOAD_FILE2_PROTOCOL_GUID, dp);
+                let Some((device_handle, file_path)) = found else {
+                    return Status::EFI_NOT_FOUND;
+                };
+                match load_file2(device_handle, file_path) {
+                    Ok(f) => file = Some(f),
+                    Err(status) => return status,
+                }
+                (device_handle, file_path)
+            } else {
+                // If no device matches, the device path is recorded in its entirety
+                let found = find_device(
+                    &EFI.protocol_db.borrow(),
+                    &EFI_DEVICE_PATH_PROTOCOL_GUID,
+                    dp,
+                );
+                found.unwrap_or((0, dp))
+            };
+
             // Record the device that the image was loaded from, if any, along with a copy of the
             // remaining part of the device path, which identifies the image file on that device.
-            // If no device matches, the device path is recorded in its entirety.
-            let found = find_device(
-                &EFI.protocol_db.borrow(),
-                &EFI_DEVICE_PATH_PROTOCOL_GUID,
-                dp,
-            );
-            let (device_handle, file_path) = found.unwrap_or((0, dp));
             origin.device_handle = device_handle;
             origin.file_path = file_path.duplicate();
             Some(copy)
@@ -961,9 +1083,12 @@ extern "efiapi" fn load_image(
         None => None,
     };
 
-    let ldr = LoadImageFileLoader {
-        source_buffer,
-        source_size,
+    let ldr = match &file {
+        Some(file) => file.loader(),
+        None => LoadImageFileLoader {
+            source_buffer,
+            source_size,
+        },
     };
 
     if let Some(li) = EFI.load_image_with_origin(&ldr, origin) {

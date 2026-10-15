@@ -13,9 +13,11 @@
 mod common;
 use common::*;
 
+use core::cell::{Cell, RefCell};
 use core::ffi::c_void;
 use core::mem::size_of_val;
 use core::ptr;
+use std::panic;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 
 /// A handle value that is never allocated by the firmware
@@ -462,6 +464,308 @@ fn load_image_rejects_null_source_buffer_and_device_path() {
         )
     };
     assert_eq!(status, Status::EFI_NOT_FOUND);
+}
+
+/// The arguments that LoadFile() of a FileServer was called with
+#[derive(Clone, Debug)]
+struct LoadFileCall {
+    /// The FilePath argument, or None if it was NULL or malformed
+    file_path: Option<Vec<u8>>,
+    boot_policy: Boolean,
+    /// The value that the BufferSize argument pointed to
+    buffer_size: usize,
+    buffer: usize,
+}
+
+/// An EFI_LOAD_FILE2_PROTOCOL implementation that serves a single file from memory, and records
+/// the calls that are made to it
+#[repr(C)]
+struct FileServer {
+    protocol: LoadFile2Protocol,
+    /// The device path of the file relative to the device, including the end node
+    file_path: Vec<u8>,
+    /// The contents of the file
+    file: Vec<u8>,
+    /// If not EFI_SUCCESS, the status that is returned instead of loading the file into a buffer
+    /// that is large enough to hold it
+    read_status: Cell<Status>,
+    calls: RefCell<Vec<LoadFileCall>>,
+}
+
+/// The LoadFile() function of FileServer, which behaves as the UEFI specification describes. It
+/// must not panic, given that panics cannot unwind out of it.
+unsafe extern "efiapi" fn serve_file(
+    this: *mut LoadFile2Protocol,
+    file_path: *mut DevicePathProtocol,
+    boot_policy: Boolean,
+    buffer_size: *mut usize,
+    buffer: *mut c_void,
+) -> Status {
+    // SAFETY: `this` points to the `protocol` field of a FileServer, which is its first field.
+    let server = unsafe { &*this.cast::<FileServer>() };
+    // Catch the panic that device_path_bytes() raises if the file path is malformed
+    // SAFETY: `file_path` is not NULL, and points to a device path, malformed or not.
+    let path = (!file_path.is_null())
+        .then(|| panic::catch_unwind(|| unsafe { device_path_bytes(file_path) }.to_vec()).ok())
+        .flatten();
+    // SAFETY: `buffer_size` is either NULL or points to a valid UINTN.
+    let Some(size) = (unsafe { buffer_size.as_mut() }) else {
+        return Status::EFI_INVALID_PARAMETER;
+    };
+    server.calls.borrow_mut().push(LoadFileCall {
+        file_path: path.clone(),
+        boot_policy,
+        buffer_size: *size,
+        buffer: buffer as usize,
+    });
+
+    if boot_policy != 0 {
+        return Status::EFI_UNSUPPORTED;
+    }
+    if path.as_ref() != Some(&server.file_path) {
+        return Status::EFI_NOT_FOUND;
+    }
+    if buffer.is_null() || *size < server.file.len() {
+        *size = server.file.len();
+        return Status::EFI_BUFFER_TOO_SMALL;
+    }
+    if server.read_status.get() != Status::EFI_SUCCESS {
+        return server.read_status.get();
+    }
+    // SAFETY: `buffer` is valid for writes of `*size` bytes, which is sufficient to hold the file.
+    unsafe { ptr::copy_nonoverlapping(server.file.as_ptr(), buffer.cast(), server.file.len()) };
+    *size = server.file.len();
+    Status::EFI_SUCCESS
+}
+
+/// Installs a device path that consists of `device` onto a new handle, along with a FileServer that
+/// serves `file` at the file path that consists of `file_path`. Returns the handle and the server.
+fn install_file_server(
+    efi: &Efi,
+    device: &[&[u8]],
+    file_path: &[&[u8]],
+    file: Vec<u8>,
+) -> (Handle, &'static FileServer) {
+    let server: &'static FileServer = Box::leak(Box::new(FileServer {
+        protocol: LoadFile2Protocol {
+            load_file: serve_file,
+        },
+        file_path: [&file_path.concat()[..], &END_NODE].concat(),
+        file,
+        read_status: Cell::new(Status::EFI_SUCCESS),
+        calls: RefCell::new(Vec::new()),
+    }));
+    let handle = efi
+        .install_protocol(
+            0,
+            &EFI_DEVICE_PATH_PROTOCOL_GUID,
+            device_path(device).cast(),
+        )
+        .unwrap();
+    let interface = server as *const FileServer as *mut c_void;
+    efi.install_protocol(handle, &EFI_LOAD_FILE2_PROTOCOL_GUID, interface)
+        .unwrap();
+    (handle, server)
+}
+
+/// Loads an image using LoadImage() without a source buffer, passing `boot_policy` as BootPolicy,
+/// and a device path that consists of `nodes`. Returns the handle of the image on success.
+fn load_image_from_device_path(
+    efi: &Efi,
+    boot_policy: Boolean,
+    nodes: &[&[u8]],
+) -> Result<Handle, Status> {
+    let mut handle = 0;
+    // SAFETY: All pointers are valid or NULL. SourceSize is ignored if SourceBuffer is NULL.
+    let status = unsafe {
+        (efi.bs().load_image)(
+            boot_policy,
+            efi.image_handle(),
+            device_path(nodes),
+            ptr::null_mut(),
+            0,
+            &mut handle,
+        )
+    };
+    if status == Status::EFI_SUCCESS {
+        Ok(handle)
+    } else {
+        Err(status)
+    }
+}
+
+/// LoadImage(): "If SourceBuffer is NULL, the function is a file copy operation that uses the
+/// EFI_SIMPLE_FILE_SYSTEM_PROTOCOL. If there is no instance of EFI_SIMPLE_FILE_SYSTEM_PROTOCOL
+/// associated with file path, then this function will attempt to use EFI_LOAD_FILE_PROTOCOL
+/// (BootPolicy is TRUE) or EFI_LOAD_FILE2_PROTOCOL, and then EFI_LOAD_FILE_PROTOCOL (BootPolicy is
+/// FALSE)." "In the case of EFI_LOAD_FILE_PROTOCOL, the remaining device path nodes of DevicePath
+/// and the BootPolicy flag are passed to the EFI_LOAD_FILE_PROTOCOL.LoadFile() function." "In the
+/// case of EFI_LOAD_FILE2_PROTOCOL, the behavior is the same as above, except that it is only used
+/// if BootPolicy is FALSE."
+#[test]
+fn load_image_from_load_file2() {
+    let efi = setup();
+    reset();
+
+    let (device, file) = (vendor_node(&new_guid()), file_path_node("\\IMAGE.EFI"));
+    let (handle, server) =
+        install_file_server(&efi, &[&device], &[&file], pe_image(returning_entry));
+    let image = load_image_from_device_path(&efi, 0, &[&device, &file]).unwrap();
+
+    // LoadFile() was passed the file path relative to the device, and FALSE as BootPolicy
+    let calls = server.calls.borrow().clone();
+    assert!(!calls.is_empty());
+    for call in calls {
+        assert_eq!(call.file_path.as_ref(), Some(&server.file_path));
+        assert_eq!(call.boot_policy, 0);
+    }
+
+    // The image handle carries the loaded image protocol, which records that the image was loaded
+    // from the device, and the loaded image device path protocol
+    let li = loaded_image(&efi, image);
+    assert_eq!(li.device_handle, handle);
+    assert_eq!(recorded_file_path(&li), Some(server.file_path.clone()));
+    let path = efi
+        .handle_protocol(image, &EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID)
+        .unwrap();
+    // SAFETY: The interface of the loaded image device path protocol is a device path.
+    assert_eq!(
+        unsafe { device_path_bytes(path.cast()) },
+        [&device[..], &file, &END_NODE].concat()
+    );
+
+    assert_eq!(start_image(&efi, image), Status::EFI_SUCCESS);
+    assert_eq!(ENTRY_COUNT.load(SeqCst), 1);
+}
+
+/// LoadImage(): "In all cases, this function will use the instance of these protocols associated
+/// with the handle that most closely matches DevicePath will be used." Devices that do not
+/// implement the LoadFile2 protocol do not qualify.
+#[test]
+fn load_image_uses_load_file2_of_closest_device() {
+    let efi = setup();
+
+    let [a, b, c] = [(); 3].map(|_| vendor_node(&new_guid()));
+    let file = file_path_node("\\IMAGE.EFI");
+    let image = pe_image(returning_entry);
+    let (handle_a, server_a) = install_file_server(&efi, &[&a], &[&file], image.clone());
+    let (handle_ab, server_ab) = install_file_server(&efi, &[&a, &b], &[&c, &file], image);
+    // A child device of the latter that does not implement LoadFile2
+    efi.install_protocol(
+        0,
+        &EFI_DEVICE_PATH_PROTOCOL_GUID,
+        device_path(&[&a, &b, &c]).cast(),
+    )
+    .unwrap();
+
+    let image = load_image_from_device_path(&efi, 0, &[&a, &b, &c, &file]).unwrap();
+    assert!(server_a.calls.borrow().is_empty());
+    let li = loaded_image(&efi, image);
+    assert_eq!(li.device_handle, handle_ab);
+    assert_eq!(recorded_file_path(&li), Some(server_ab.file_path.clone()));
+
+    let image = load_image_from_device_path(&efi, 0, &[&a, &file]).unwrap();
+    let li = loaded_image(&efi, image);
+    assert_eq!(li.device_handle, handle_a);
+    assert_eq!(recorded_file_path(&li), Some(server_a.file_path.clone()));
+}
+
+/// LoadImage(): EFI_LOAD_FILE2_PROTOCOL "is only used if BootPolicy is FALSE". As efiloader does
+/// not support loading images via EFI_SIMPLE_FILE_SYSTEM_PROTOCOL or EFI_LOAD_FILE_PROTOCOL, it
+/// returns EFI_NOT_FOUND instead, as EDK2 does if it finds neither.
+#[test]
+fn load_image_does_not_use_load_file2_if_boot_policy_is_true() {
+    let efi = setup();
+
+    let (device, file) = (vendor_node(&new_guid()), file_path_node("\\IMAGE.EFI"));
+    let (_, server) = install_file_server(&efi, &[&device], &[&file], pe_image(returning_entry));
+    assert_eq!(
+        load_image_from_device_path(&efi, 1, &[&device, &file]),
+        Err(Status::EFI_NOT_FOUND)
+    );
+    assert!(server.calls.borrow().is_empty());
+}
+
+/// If none of the devices that DevicePath refers to implements the LoadFile2 protocol, LoadImage()
+/// returns EFI_NOT_FOUND, as EDK2 does.
+#[test]
+fn load_image_without_load_file2_returns_not_found() {
+    let efi = setup();
+
+    let (device, file) = (vendor_node(&new_guid()), file_path_node("\\IMAGE.EFI"));
+    efi.install_protocol(
+        0,
+        &EFI_DEVICE_PATH_PROTOCOL_GUID,
+        device_path(&[&device]).cast(),
+    )
+    .unwrap();
+    assert_eq!(
+        load_image_from_device_path(&efi, 0, &[&device, &file]),
+        Err(Status::EFI_NOT_FOUND)
+    );
+}
+
+/// LoadImage() passes on the errors returned by LoadFile(), e.g., "EFI_NOT_FOUND: The file was not
+/// found." and "EFI_DEVICE_ERROR: Image was not loaded because the device returned a read error."
+#[test]
+fn load_image_passes_on_load_file2_errors() {
+    let efi = setup();
+
+    let (device, file) = (vendor_node(&new_guid()), file_path_node("\\IMAGE.EFI"));
+    let (_, server) = install_file_server(&efi, &[&device], &[&file], pe_image(returning_entry));
+    let other_file = file_path_node("\\OTHER.EFI");
+    assert_eq!(
+        load_image_from_device_path(&efi, 0, &[&device, &other_file]),
+        Err(Status::EFI_NOT_FOUND)
+    );
+
+    server.read_status.set(Status::EFI_DEVICE_ERROR);
+    assert_eq!(
+        load_image_from_device_path(&efi, 0, &[&device, &file]),
+        Err(Status::EFI_DEVICE_ERROR)
+    );
+}
+
+/// LoadImage() frees the buffer that it loads the file into via LoadFile2, regardless of whether
+/// it manages to load the image from it.
+#[test]
+fn load_image_frees_file_loaded_via_load_file2() {
+    let efi = setup();
+
+    for (contents, read_status, result) in [
+        (pe_image(returning_entry), Status::EFI_SUCCESS, None),
+        // "EFI_LOAD_ERROR: Image was not loaded because the image format was corrupt or not
+        // understood."
+        (
+            vec![0; SIZE_OF_IMAGE as usize],
+            Status::EFI_SUCCESS,
+            Some(Status::EFI_LOAD_ERROR),
+        ),
+        (
+            pe_image(returning_entry),
+            Status::EFI_DEVICE_ERROR,
+            Some(Status::EFI_DEVICE_ERROR),
+        ),
+    ] {
+        let (device, file) = (vendor_node(&new_guid()), file_path_node("\\IMAGE.EFI"));
+        let (_, server) = install_file_server(&efi, &[&device], &[&file], contents);
+        server.read_status.set(read_status);
+        assert_eq!(
+            load_image_from_device_path(&efi, 0, &[&device, &file]).err(),
+            result
+        );
+
+        let calls = server.calls.borrow();
+        let read = calls
+            .iter()
+            .find(|call| call.buffer != 0)
+            .expect("LoadFile() was not passed a buffer");
+        let buffer = read.buffer as u64..(read.buffer + read.buffer_size) as u64;
+        assert_eq!(
+            efi.memory_map().type_of(buffer),
+            Some(EFI_CONVENTIONAL_MEMORY)
+        );
+    }
 }
 
 /// LoadImage() returns EFI_LOAD_ERROR if the "Image was not loaded because the image format was

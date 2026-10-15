@@ -134,6 +134,13 @@ pub const EFI_DEVICE_PATH_PROTOCOL_GUID: Guid = Guid {
     data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
 };
 
+pub const EFI_LOAD_FILE2_PROTOCOL_GUID: Guid = Guid {
+    data1: 0x4006c0c1,
+    data2: 0xfcb3,
+    data3: 0x403e,
+    data4: [0x99, 0x6d, 0x4a, 0x6c, 0x87, 0x24, 0xe0, 0x6d],
+};
+
 pub const EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID: Guid = Guid {
     data1: 0x387477c1,
     data2: 0x69c7,
@@ -233,6 +240,19 @@ pub struct LoadedImageProtocol {
     pub image_code_type: u32,
     pub image_data_type: u32,
     pub unload: Option<unsafe extern "efiapi" fn(Handle) -> Status>,
+}
+
+/// EFI_LOAD_FILE2_PROTOCOL
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct LoadFile2Protocol {
+    pub load_file: unsafe extern "efiapi" fn(
+        *mut LoadFile2Protocol,
+        *mut DevicePathProtocol,
+        Boolean,
+        *mut usize,
+        *mut c_void,
+    ) -> Status,
 }
 
 /// EFI_BOOT_SERVICES

@@ -32,6 +32,11 @@ impl Status {
     pub const EFI_ALREADY_STARTED: Status = Status(20 + EFI_ERROR_BASE);
     pub const EFI_ABORTED: Status = Status(21 + EFI_ERROR_BASE);
     pub const EFI_SECURITY_VIOLATION: Status = Status(26 + EFI_ERROR_BASE);
+
+    /// Returns whether this is an error code, as opposed to a success or warning code
+    pub(crate) fn is_error(self) -> bool {
+        self.0 & EFI_ERROR_BASE != 0
+    }
 }
 
 impl fmt::Debug for Status {
