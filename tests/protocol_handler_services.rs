@@ -369,7 +369,6 @@ fn uninstall_protocol_interface_rejects_unknown_interface() {
 
 /// UninstallProtocolInterface() returns EFI_INVALID_PARAMETER if "Handle is NULL".
 #[test]
-#[ignore = "efiloader returns EFI_UNSUPPORTED"]
 fn uninstall_protocol_interface_rejects_null_handle() {
     let efi = setup();
     let bs = efi.bs();
@@ -383,7 +382,6 @@ fn uninstall_protocol_interface_rejects_null_handle() {
 
 /// UninstallProtocolInterface() returns EFI_INVALID_PARAMETER if "Protocol is NULL".
 #[test]
-#[ignore = "efiloader returns EFI_UNSUPPORTED"]
 fn uninstall_protocol_interface_rejects_null_protocol() {
     let efi = setup();
     let bs = efi.bs();
@@ -484,7 +482,6 @@ fn reinstall_protocol_interface_rejects_unknown_interface() {
 
 /// ReinstallProtocolInterface() returns EFI_INVALID_PARAMETER if "Handle is NULL".
 #[test]
-#[ignore = "efiloader returns EFI_UNSUPPORTED"]
 fn reinstall_protocol_interface_rejects_null_handle() {
     let efi = setup();
     let bs = efi.bs();
@@ -497,7 +494,6 @@ fn reinstall_protocol_interface_rejects_null_handle() {
 
 /// ReinstallProtocolInterface() returns EFI_INVALID_PARAMETER if "Protocol is NULL".
 #[test]
-#[ignore = "efiloader returns EFI_UNSUPPORTED"]
 fn reinstall_protocol_interface_rejects_null_protocol() {
     let efi = setup();
     let bs = efi.bs();
@@ -566,7 +562,6 @@ fn handle_protocol_rejects_unsupported_protocol() {
 
 /// HandleProtocol() returns EFI_INVALID_PARAMETER if "Handle is NULL".
 #[test]
-#[ignore = "efiloader returns EFI_UNSUPPORTED"]
 fn handle_protocol_rejects_null_handle() {
     let efi = setup();
     let guid = new_guid();
@@ -1264,7 +1259,6 @@ fn open_protocol_rejects_null_pointers() {
 
 /// OpenProtocol() returns EFI_INVALID_PARAMETER if "Handle is NULL".
 #[test]
-#[ignore = "efiloader returns EFI_UNSUPPORTED"]
 fn open_protocol_rejects_null_handle() {
     let efi = setup();
     let bs = efi.bs();

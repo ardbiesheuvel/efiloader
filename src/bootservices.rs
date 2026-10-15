@@ -593,7 +593,7 @@ extern "efiapi" fn uninstall_protocol_interface(
     interface: *const (),
 ) -> Status {
     if handle == 0 || protocol.is_null() {
-        return Status::EFI_UNSUPPORTED;
+        return Status::EFI_INVALID_PARAMETER;
     }
 
     // SAFETY: `protocol` is not NULL, and the UEFI spec requires it to point to a valid EFI_GUID.
@@ -621,7 +621,7 @@ extern "efiapi" fn reinstall_protocol_interface(
     new_interface: *const (),
 ) -> Status {
     if handle == 0 || protocol.is_null() {
-        return Status::EFI_UNSUPPORTED;
+        return Status::EFI_INVALID_PARAMETER;
     }
 
     // SAFETY: `protocol` is not NULL, and the UEFI spec requires it to point to a valid EFI_GUID.
@@ -1037,7 +1037,9 @@ extern "efiapi" fn open_protocol(
     _controller_handle: Handle,
     attributes: u32,
 ) -> Status {
-    if protocol.is_null() || (interface.is_null() && attributes != EFI_OPEN_PROTOCOL_TEST_PROTOCOL)
+    if handle == 0
+        || protocol.is_null()
+        || (interface.is_null() && attributes != EFI_OPEN_PROTOCOL_TEST_PROTOCOL)
     {
         return Status::EFI_INVALID_PARAMETER;
     }
