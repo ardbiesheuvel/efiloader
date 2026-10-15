@@ -104,11 +104,12 @@ impl LoadedImageData {
         code_type: EfiMemoryType,
         data_type: EfiMemoryType,
         randomized: bool,
+        parent: Handle,
     ) -> Option<LoadedImageData> {
         let handle: Handle = new_handle();
         let li = Box::pin(EfiLoadedImage {
             revision: EFI_LOADED_IMAGE_PROTOCOL_REVISION,
-            parent_handle: 0,
+            parent_handle: parent,
             system_table: efi_system_table(),
             device_handle: 0,
             file_path: ptr::null(),

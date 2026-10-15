@@ -518,6 +518,17 @@ impl EfiContext {
     /// instance on success which can be used to set load options and start the image, or `None` on
     /// failure.
     pub fn load_image<'a>(&'static self, loader: &'a dyn FileLoader) -> Option<LoadedImageData> {
+        // Images loaded by the embedder have no parent image
+        self.load_child_image(loader, 0)
+    }
+
+    /// Like [`load_image`](Self::load_image), but for an image whose parent image is the image with
+    /// handle `parent`.
+    pub(crate) fn load_child_image(
+        &'static self,
+        loader: &dyn FileLoader,
+        parent: Handle,
+    ) -> Option<LoadedImageData> {
         let pe_ldr = PeLoader::new(loader, self)?;
 
         let align = EFI_PAGE_SIZE.max(pe_ldr.section_alignment()) as u64;
@@ -530,7 +541,14 @@ impl EfiContext {
 
         let pe_image = pe_ldr.load(EfiLoaderCode, placement, &*self.mapper)?;
 
-        LoadedImageData::new(&self, &pe_image, EfiLoaderCode, EfiLoaderData, randomized)
+        LoadedImageData::new(
+            &self,
+            &pe_image,
+            EfiLoaderCode,
+            EfiLoaderData,
+            randomized,
+            parent,
+        )
     }
 
     /// Override the Get/SetTime EFI runtime services by local implementations.

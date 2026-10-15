@@ -935,7 +935,7 @@ extern "efiapi" fn load_image(
         source_size,
     };
 
-    if let Some(li) = EFI.load_image(&ldr) {
+    if let Some(li) = EFI.load_child_image(&ldr, parent_image_handle) {
         // SAFETY: `image_handle` is not NULL, and the UEFI spec requires it to point to a writable
         // EFI_HANDLE.
         unsafe {

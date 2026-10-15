@@ -208,7 +208,6 @@ fn load_image_does_not_retain_source_buffer() {
 /// "The caller's image handle" is passed as ParentImageHandle, and the loaded image protocol
 /// records it: "ParentHandle: Parent image's image handle."
 #[test]
-#[ignore = "efiloader always sets ParentHandle to NULL"]
 fn load_image_records_parent_image_handle() {
     let efi = setup();
 
