@@ -55,11 +55,13 @@ impl LocateSearchType {
 }
 
 const EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL: u32 = 0x00000001;
-//const EFI_OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x00000002;
+const EFI_OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x00000002;
 const EFI_OPEN_PROTOCOL_TEST_PROTOCOL: u32 = 0x00000004;
-//const EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER: u32 = 0x00000008;
-//const EFI_OPEN_PROTOCOL_BY_DRIVER: u32 = 0x00000010;
-//const EFI_OPEN_PROTOCOL_EXCLUSIVE: u32 = 0x00000020;
+const EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER: u32 = 0x00000008;
+const EFI_OPEN_PROTOCOL_BY_DRIVER: u32 = 0x00000010;
+const EFI_OPEN_PROTOCOL_EXCLUSIVE: u32 = 0x00000020;
+const EFI_OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE: u32 =
+    EFI_OPEN_PROTOCOL_BY_DRIVER | EFI_OPEN_PROTOCOL_EXCLUSIVE;
 
 #[repr(C)]
 struct OpenProtocolInformationEntry {
@@ -1033,14 +1035,34 @@ extern "efiapi" fn open_protocol(
     handle: Handle,
     protocol: *const Guid,
     interface: *mut *const (),
-    _agent_handle: Handle,
-    _controller_handle: Handle,
+    agent_handle: Handle,
+    controller_handle: Handle,
     attributes: u32,
 ) -> Status {
     if handle == 0
         || protocol.is_null()
         || (interface.is_null() && attributes != EFI_OPEN_PROTOCOL_TEST_PROTOCOL)
     {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
+    // Only certain combinations of attributes are permitted, some of which require an agent handle
+    // and/or a controller handle. Note that open protocol information is not tracked, and so the
+    // attributes have no further effect.
+    let valid = match attributes {
+        EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL
+        | EFI_OPEN_PROTOCOL_GET_PROTOCOL
+        | EFI_OPEN_PROTOCOL_TEST_PROTOCOL => true,
+        EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER => {
+            agent_handle != 0 && controller_handle != 0 && controller_handle != handle
+        }
+        EFI_OPEN_PROTOCOL_BY_DRIVER | EFI_OPEN_PROTOCOL_BY_DRIVER_EXCLUSIVE => {
+            agent_handle != 0 && controller_handle != 0
+        }
+        EFI_OPEN_PROTOCOL_EXCLUSIVE => agent_handle != 0,
+        _ => false,
+    };
+    if !valid {
         return Status::EFI_INVALID_PARAMETER;
     }
 

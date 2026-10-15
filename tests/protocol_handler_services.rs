@@ -1280,7 +1280,6 @@ fn open_protocol_rejects_null_handle() {
 
 /// OpenProtocol() returns EFI_INVALID_PARAMETER if "Attributes is not a legal value".
 #[test]
-#[ignore = "efiloader does not validate Attributes"]
 fn open_protocol_rejects_illegal_attributes() {
     let efi = setup();
     let bs = efi.bs();
@@ -1307,6 +1306,65 @@ fn open_protocol_rejects_illegal_attributes() {
             Status::EFI_INVALID_PARAMETER,
             "Attributes {attributes:#x}"
         );
+    }
+}
+
+/// The attributes used by drivers that follow the UEFI driver model require an AgentHandle, and
+/// all but EXCLUSIVE also a ControllerHandle: OpenProtocol() returns EFI_INVALID_PARAMETER if, e.g.,
+/// "Attributes is BY_DRIVER and AgentHandle is NULL", "Attributes is BY_CHILD_CONTROLLER and
+/// ControllerHandle is NULL" or "Attributes is BY_CHILD_CONTROLLER and Handle is identical to
+/// ControllerHandle".
+#[test]
+fn open_protocol_with_driver_model_attributes() {
+    let efi = setup();
+    let bs = efi.bs();
+    let guid = new_guid();
+    let interface = new_interface();
+
+    let handle = efi.install_protocol(0, &guid, interface).unwrap();
+    let controller = efi
+        .install_protocol(0, &new_guid(), new_interface())
+        .unwrap();
+    let agent = efi.image_handle();
+    let by_child_controller = EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER;
+    let by_driver = EFI_OPEN_PROTOCOL_BY_DRIVER;
+    let exclusive = EFI_OPEN_PROTOCOL_EXCLUSIVE;
+
+    for (attributes, agent, controller) in [
+        (by_child_controller, 0, controller),
+        (by_child_controller, agent, 0),
+        (by_child_controller, agent, handle),
+        (by_driver, 0, controller),
+        (by_driver, agent, 0),
+        (by_driver | exclusive, 0, controller),
+        (by_driver | exclusive, agent, 0),
+        (exclusive, 0, controller),
+    ] {
+        let mut found = ptr::null_mut();
+        assert_eq!(
+            open_protocol(
+                &bs, handle, &guid, &mut found, agent, controller, attributes
+            ),
+            Status::EFI_INVALID_PARAMETER,
+            "Attributes {attributes:#x} AgentHandle {agent:#x} ControllerHandle {controller:#x}"
+        );
+    }
+
+    for (attributes, controller) in [
+        (by_child_controller, controller),
+        (by_driver, controller),
+        (by_driver | exclusive, controller),
+        (exclusive, 0),
+    ] {
+        let mut found = ptr::null_mut();
+        assert_eq!(
+            open_protocol(
+                &bs, handle, &guid, &mut found, agent, controller, attributes
+            ),
+            Status::EFI_SUCCESS,
+            "Attributes {attributes:#x}"
+        );
+        assert_eq!(found, interface);
     }
 }
 
