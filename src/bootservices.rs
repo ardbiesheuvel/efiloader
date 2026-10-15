@@ -834,7 +834,13 @@ extern "efiapi" fn install_configuration_table(guid: *const Guid, table: *const 
         return Status::EFI_INVALID_PARAMETER;
     }
     // SAFETY: `guid` is not NULL, and the UEFI spec requires it to point to a valid EFI_GUID.
-    EFI.install_configtable(unsafe { &*guid }, table);
+    let guid = unsafe { &*guid };
+
+    // A NULL table removes the entry identified by `guid`, which must exist
+    if table.is_null() && !EFI.cfgtable.contains(guid) {
+        return Status::EFI_NOT_FOUND;
+    }
+    EFI.install_configtable(guid, table);
     Status::EFI_SUCCESS
 }
 

@@ -300,7 +300,7 @@ impl Deref for ProtocolEntry {
 pub(crate) type ProtocolDb = BTreeMap<(Handle, Guid), ProtocolEntry>;
 
 pub struct EfiContext {
-    cfgtable: ConfigTableDb,
+    pub(crate) cfgtable: ConfigTableDb,
     pub(crate) protocol_db: RefCell<ProtocolDb>,
     /// Copies of GUIDs that were returned to EFI images by reference, e.g., by
     /// ProtocolsPerHandle(). These are never freed, given that EFI images may hold on to such

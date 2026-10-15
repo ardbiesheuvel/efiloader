@@ -73,6 +73,11 @@ impl ConfigTableDb {
         }
     }
 
+    /// Returns whether a configuration table identified by `guid` is installed
+    pub(crate) fn contains(&self, guid: &Guid) -> bool {
+        self.db.borrow().0.contains_key(guid)
+    }
+
     pub(crate) fn install<T>(&self, guid: &Guid, p: T, efi: &EfiContext)
     where
         T: Into<ConfigurationTablePointer>,

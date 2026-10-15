@@ -296,7 +296,6 @@ fn install_configuration_table_with_many_entries() {
 /// InstallConfigurationTable(): "If Guid is not present in the System Table, and Table is NULL,
 /// then EFI_NOT_FOUND is returned."
 #[test]
-#[ignore = "efiloader returns EFI_SUCCESS"]
 fn install_configuration_table_rejects_removing_nonexistent_entry() {
     let efi = setup();
     let bs = efi.bs();
