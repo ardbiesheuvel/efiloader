@@ -215,6 +215,101 @@ fn load_image_records_parent_image_handle() {
     assert_eq!(loaded_image(&efi, handle).parent_handle, efi.image_handle());
 }
 
+/// Loads an image from memory using LoadImage(), passing a device path consisting of `nodes`, and
+/// returns its loaded image protocol. The device path is clobbered before returning, given that the
+/// caller of LoadImage() is free to reuse it at that point.
+fn load_image_with_device_path(efi: &Efi, nodes: &[&[u8]]) -> LoadedImageProtocol {
+    let image = pe_image(returning_entry);
+    let path = device_path(nodes);
+    let mut handle = 0;
+    // SAFETY: All pointers are valid, and `image` is a buffer of `image.len()` bytes.
+    let status = unsafe {
+        (efi.bs().load_image)(
+            0,
+            efi.image_handle(),
+            path,
+            image.as_ptr() as *mut c_void,
+            image.len(),
+            &mut handle,
+        )
+    };
+    assert_eq!(status, Status::EFI_SUCCESS);
+    // SAFETY: `path` points to a device path that was leaked by device_path().
+    unsafe { ptr::write_bytes(path.cast::<u8>(), 0, device_path_bytes(path).len()) };
+    loaded_image(efi, handle)
+}
+
+/// Returns a copy of the file path recorded in the loaded image protocol `li`, if any
+fn recorded_file_path(li: &LoadedImageProtocol) -> Option<Vec<u8>> {
+    // SAFETY: FilePath is either NULL or points to a device path that remains valid for as long as
+    // the image is loaded.
+    (!li.file_path.is_null()).then(|| unsafe { device_path_bytes(li.file_path) }.to_vec())
+}
+
+/// LoadImage() records the device that the image was loaded from in the loaded image protocol,
+/// along with the remaining part of DevicePath: "DeviceHandle: The device handle that the EFI Image
+/// was loaded from." "FilePath: A pointer to the file path portion specific to DeviceHandle that
+/// the EFI Image was loaded from." As with LocateDevicePath(), the device is the one whose device
+/// path matches the most leading nodes of DevicePath.
+#[test]
+fn load_image_records_device_handle_and_file_path() {
+    let efi = setup();
+
+    // A device, and a child device of that device
+    let (a, b) = (vendor_node(&new_guid()), vendor_node(&new_guid()));
+    let device_a = efi
+        .install_protocol(0, &EFI_DEVICE_PATH_PROTOCOL_GUID, device_path(&[&a]).cast())
+        .unwrap();
+    let device_ab = efi
+        .install_protocol(
+            0,
+            &EFI_DEVICE_PATH_PROTOCOL_GUID,
+            device_path(&[&a, &b]).cast(),
+        )
+        .unwrap();
+
+    let file = file_path_node("\\EFI\\BOOT\\IMAGE.EFI");
+    let file_path = Some([&file[..], &END_NODE].concat());
+
+    let li = load_image_with_device_path(&efi, &[&a, &b, &file]);
+    assert_eq!(li.device_handle, device_ab);
+    assert_eq!(recorded_file_path(&li), file_path);
+
+    let li = load_image_with_device_path(&efi, &[&a, &file]);
+    assert_eq!(li.device_handle, device_a);
+    assert_eq!(recorded_file_path(&li), file_path);
+
+    // If DevicePath is the device path of the device itself, only the end node remains
+    let li = load_image_with_device_path(&efi, &[&a, &b]);
+    assert_eq!(li.device_handle, device_ab);
+    assert_eq!(recorded_file_path(&li), Some(END_NODE.to_vec()));
+}
+
+/// If no device matches DevicePath, LoadImage() records no device handle, and all of DevicePath as
+/// the file path.
+#[test]
+fn load_image_records_entire_device_path_if_no_device_matches() {
+    let efi = setup();
+
+    let nodes = [vendor_node(&new_guid()), file_path_node("\\IMAGE.EFI")];
+    let li = load_image_with_device_path(&efi, &[&nodes[0], &nodes[1]]);
+    assert_eq!(li.device_handle, 0);
+    assert_eq!(
+        recorded_file_path(&li),
+        Some([&nodes[0][..], &nodes[1], &END_NODE].concat())
+    );
+}
+
+/// If no DevicePath is passed to LoadImage(), it records neither a device handle nor a file path.
+#[test]
+fn load_image_without_device_path_records_no_device_handle_or_file_path() {
+    let efi = setup();
+
+    let li = loaded_image(&efi, efi.load_image(&pe_image(returning_entry)).unwrap());
+    assert_eq!(li.device_handle, 0);
+    assert!(li.file_path.is_null());
+}
+
 /// LoadImage() installs the EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL onto the image handle, alongside
 /// the loaded image protocol. If no device path was passed to LoadImage(), its interface is NULL.
 #[test]

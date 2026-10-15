@@ -518,16 +518,16 @@ impl EfiContext {
     /// instance on success which can be used to set load options and start the image, or `None` on
     /// failure.
     pub fn load_image<'a>(&'static self, loader: &'a dyn FileLoader) -> Option<LoadedImageData> {
-        // Images loaded by the embedder have no parent image
-        self.load_child_image(loader, 0)
+        // Images loaded by the embedder have no parent image, and no known device of origin
+        self.load_image_with_origin(loader, ImageOrigin::default())
     }
 
-    /// Like [`load_image`](Self::load_image), but for an image whose parent image is the image with
-    /// handle `parent`.
-    pub(crate) fn load_child_image(
+    /// Like [`load_image`](Self::load_image), but for an image whose parent image and device of
+    /// origin are described by `origin`.
+    pub(crate) fn load_image_with_origin(
         &'static self,
         loader: &dyn FileLoader,
-        parent: Handle,
+        origin: ImageOrigin,
     ) -> Option<LoadedImageData> {
         let pe_ldr = PeLoader::new(loader, self)?;
 
@@ -547,7 +547,7 @@ impl EfiContext {
             EfiLoaderCode,
             EfiLoaderData,
             randomized,
-            parent,
+            origin,
         )
     }
 

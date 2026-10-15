@@ -77,6 +77,8 @@ pub struct EfiLoadedImage {
     ctx: &'static EfiContext,
     image_handle: Handle,
     entrypoint: *const u8,
+    /// The copy of the device path that `file_path` points to, if any
+    file_path_buf: Option<Box<[u8]>>,
     /// Whether the image has been started, which may only happen once
     started: Cell<bool>,
     /// The size of and the pointer to the exit data that the image passed to Exit(), if any, which
@@ -127,6 +129,18 @@ pub struct LoadedImageData {
     load_options: Vec<u16>,
 }
 
+/// Describes where an image originates from, which is recorded in its loaded image protocol
+#[derive(Default)]
+pub(crate) struct ImageOrigin {
+    /// The handle of the image that loaded the image, or 0 if it was loaded by the embedder
+    pub(crate) parent: Handle,
+    /// The handle of the device that the image was loaded from, or 0 if unknown
+    pub(crate) device_handle: Handle,
+    /// A copy of the device path of the image file relative to the device it was loaded from, if
+    /// any
+    pub(crate) file_path: Option<Box<[u8]>>,
+}
+
 /// Returns a pointer to the loaded image protocol instance of the image with handle `handle`, if
 /// it is an image that was loaded by the EFI runtime. (Loaded image protocols installed by EFI
 /// images are not EfiLoadedImage instances.) The instance remains valid until the image is
@@ -144,15 +158,19 @@ impl LoadedImageData {
         code_type: EfiMemoryType,
         data_type: EfiMemoryType,
         randomized: bool,
-        parent: Handle,
+        origin: ImageOrigin,
     ) -> Option<LoadedImageData> {
         let handle: Handle = new_handle();
+        let file_path = origin
+            .file_path
+            .as_ref()
+            .map_or(ptr::null(), |fp| fp.as_ptr() as *const ());
         let li = Box::pin(EfiLoadedImage {
             revision: EFI_LOADED_IMAGE_PROTOCOL_REVISION,
-            parent_handle: parent,
+            parent_handle: origin.parent,
             system_table: efi_system_table(),
-            device_handle: 0,
-            file_path: ptr::null(),
+            device_handle: origin.device_handle,
+            file_path,
             reserved: Cell::new(0),
             load_options_size: Cell::new(0),
             load_options: Cell::new(ptr::null()),
@@ -165,6 +183,7 @@ impl LoadedImageData {
             ctx: ctx,
             image_handle: handle,
             entrypoint: pe_image.entry_point(),
+            file_path_buf: origin.file_path,
             started: Cell::new(false),
             exit_data: Cell::new((0, ptr::null_mut())),
             pin: PhantomPinned,

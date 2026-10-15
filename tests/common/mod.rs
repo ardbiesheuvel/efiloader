@@ -800,8 +800,13 @@ pub fn new_interface() -> *mut c_void {
 
 pub const HARDWARE_DEVICE_PATH: u8 = 0x01;
 pub const HW_VENDOR_DP: u8 = 0x04;
+pub const MEDIA_DEVICE_PATH: u8 = 0x04;
+pub const MEDIA_FILEPATH_DP: u8 = 0x04;
 pub const END_DEVICE_PATH_TYPE: u8 = 0x7f;
 pub const END_ENTIRE_DEVICE_PATH_SUBTYPE: u8 = 0xff;
+
+/// The node that terminates a device path
+pub const END_NODE: [u8; 4] = [END_DEVICE_PATH_TYPE, END_ENTIRE_DEVICE_PATH_SUBTYPE, 4, 0];
 
 /// Returns a vendor-defined hardware device path node identified by `guid`
 pub fn vendor_node(guid: &Guid) -> Vec<u8> {
@@ -814,13 +819,50 @@ pub fn vendor_node(guid: &Guid) -> Vec<u8> {
     node
 }
 
+/// Returns a file path media device path node for the file at `path`
+pub fn file_path_node(path: &str) -> Vec<u8> {
+    let mut node = vec![MEDIA_DEVICE_PATH, MEDIA_FILEPATH_DP, 0, 0];
+    for c in path.encode_utf16().chain([0]) {
+        node.extend_from_slice(&c.to_le_bytes());
+    }
+    let len = node.len() as u16;
+    node[2..4].copy_from_slice(&len.to_le_bytes());
+    node
+}
+
 /// Returns a pointer to a new device path consisting of `nodes` followed by an end node. The device
 /// path is leaked, so that it remains valid for as long as protocol database entries may refer to
 /// it.
 pub fn device_path(nodes: &[&[u8]]) -> *mut DevicePathProtocol {
     let mut path = nodes.concat();
-    path.extend_from_slice(&[END_DEVICE_PATH_TYPE, END_ENTIRE_DEVICE_PATH_SUBTYPE, 4, 0]);
+    path.extend_from_slice(&END_NODE);
     Box::leak(path.into_boxed_slice()).as_mut_ptr().cast()
+}
+
+/// Returns the device path at `path` as a byte slice, including its end node.
+///
+/// # Safety
+///
+/// `path` must point to a device path that remains valid and unmodified for the lifetime `'a`.
+pub unsafe fn device_path_bytes<'a>(path: *const DevicePathProtocol) -> &'a [u8] {
+    let mut size = 0;
+    loop {
+        // SAFETY: The caller guarantees that `path` points to a device path, and `size` is the
+        // offset of one of its nodes, given that the previous one was not an end node.
+        let node = unsafe { ptr::read(path.cast::<u8>().add(size).cast::<DevicePathProtocol>()) };
+        let len = u16::from_le_bytes(node.length) as usize;
+        assert!(
+            len >= size_of::<DevicePathProtocol>(),
+            "malformed device path"
+        );
+        size += len;
+        if node.r#type == END_DEVICE_PATH_TYPE && node.sub_type == END_ENTIRE_DEVICE_PATH_SUBTYPE {
+            break;
+        }
+    }
+    // SAFETY: The device path covers `size` bytes, and the caller guarantees that it remains valid
+    // and unmodified for the lifetime `'a`.
+    unsafe { slice::from_raw_parts(path.cast(), size) }
 }
 
 /// Reference implementation of the 32-bit CRC used by UEFI (as used by Ethernet, zlib, etc)

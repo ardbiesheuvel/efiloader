@@ -11,7 +11,8 @@ use crate::{Bool, Char16, Event, EventNotify, Guid, Handle, PhysicalAddress, Tpl
 use crate::{ProtocolDb, ProtocolEntry, ProtocolOwner, TPL_APPLICATION, UEFI_REVISION};
 
 use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
-use crate::loadedimage::{current_image, exit_image, find_loaded_image, LoadedImageDevicePath};
+use crate::loadedimage::{current_image, exit_image, find_loaded_image};
+use crate::loadedimage::{ImageOrigin, LoadedImageDevicePath};
 use crate::new_handle;
 use crate::EFI;
 
@@ -931,6 +932,11 @@ extern "efiapi" fn load_image(
         return Status::EFI_UNSUPPORTED;
     }
 
+    let mut origin = ImageOrigin {
+        parent: parent_image_handle,
+        ..Default::default()
+    };
+
     // Take a copy of the device path, if any, for the loaded image device path protocol
     // SAFETY: The UEFI spec requires `device_path` to be NULL or point to a valid device path.
     let device_path = match unsafe { device_path.as_ref() } {
@@ -938,6 +944,18 @@ extern "efiapi" fn load_image(
             let Some(copy) = dp.duplicate() else {
                 return Status::EFI_INVALID_PARAMETER;
             };
+
+            // Record the device that the image was loaded from, if any, along with a copy of the
+            // remaining part of the device path, which identifies the image file on that device.
+            // If no device matches, the device path is recorded in its entirety.
+            let found = find_device(
+                &EFI.protocol_db.borrow(),
+                &EFI_DEVICE_PATH_PROTOCOL_GUID,
+                dp,
+            );
+            let (device_handle, file_path) = found.unwrap_or((0, dp));
+            origin.device_handle = device_handle;
+            origin.file_path = file_path.duplicate();
             Some(copy)
         }
         None => None,
@@ -948,7 +966,7 @@ extern "efiapi" fn load_image(
         source_size,
     };
 
-    if let Some(li) = EFI.load_child_image(&ldr, parent_image_handle) {
+    if let Some(li) = EFI.load_image_with_origin(&ldr, origin) {
         // This cannot fail, given that the image handle is new
         let _ = EFI.install_pinned_protocol(
             li.image_handle,
