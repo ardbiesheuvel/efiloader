@@ -15,6 +15,9 @@ use crate::initrdloadfile2::EFI_LOAD_FILE2_PROTOCOL_GUID;
 use crate::loadedimage::{current_image, exit_image, find_loaded_image};
 use crate::loadedimage::{ImageOrigin, LoadedImageDevicePath};
 use crate::new_handle;
+use crate::simplefilesystem::{EfiFileProtocol, EfiSimpleFileSystemProtocol};
+use crate::simplefilesystem::{EFI_FILE_DIRECTORY, EFI_FILE_INFO_ID, EFI_FILE_MODE_READ};
+use crate::simplefilesystem::{EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID, SIZE_OF_EFI_FILE_INFO};
 use crate::EFI;
 
 use alloc::boxed::Box;
@@ -961,6 +964,17 @@ impl Drop for FileBuffer {
     }
 }
 
+/// Returns the status to pass on to the caller of LoadImage() if a file could not be loaded, given
+/// the status returned by the protocol that was used to load it. Errors are passed on, but success
+/// and warning codes are not, given that they are only returned here if no file was loaded.
+fn file_error(status: Status) -> Status {
+    if status.is_error() {
+        status
+    } else {
+        Status::EFI_LOAD_ERROR
+    }
+}
+
 /// Loads the file that `file_path` refers to into a FileBuffer, using the LoadFile2 protocol that
 /// is installed on `handle`.
 fn load_file2(handle: Handle, file_path: &DevicePath) -> Result<FileBuffer, Status> {
@@ -975,16 +989,6 @@ fn load_file2(handle: Handle, file_path: &DevicePath) -> Result<FileBuffer, Stat
         return Err(Status::EFI_NOT_FOUND);
     };
 
-    // Errors returned by LoadFile2 are passed on, but success and warning codes are not, given that
-    // they are only returned here if no file was loaded.
-    let error = |status: Status| {
-        if status.is_error() {
-            status
-        } else {
-            Status::EFI_LOAD_ERROR
-        }
-    };
-
     // Query the size of the file, which LoadFile() returns along with EFI_BUFFER_TOO_SMALL if it
     // is not passed a buffer. An empty file cannot be loaded as an image.
     let mut size = 0;
@@ -992,7 +996,7 @@ fn load_file2(handle: Handle, file_path: &DevicePath) -> Result<FileBuffer, Stat
     // path, and a pointer to a valid UINTN that indicates that no buffer is provided.
     let status = unsafe { load_file(protocol, file_path, 0, &mut size, ptr::null_mut()) };
     if status != Status::EFI_BUFFER_TOO_SMALL {
-        return Err(error(status));
+        return Err(file_error(status));
     }
     if size == 0 {
         return Err(Status::EFI_LOAD_ERROR);
@@ -1005,11 +1009,170 @@ fn load_file2(handle: Handle, file_path: &DevicePath) -> Result<FileBuffer, Stat
     // writes of that many bytes.
     let status = unsafe { load_file(protocol, file_path, 0, &mut size, buffer) };
     if status != Status::EFI_SUCCESS {
-        return Err(error(status));
+        return Err(file_error(status));
     }
     // LoadFile() returns the number of bytes that it loaded into the buffer
     file.size = file.size.min(size);
     Ok(file)
+}
+
+/// A handle of a file that was opened via the file protocol, which is closed when dropped
+struct OpenFile(*mut EfiFileProtocol);
+
+impl OpenFile {
+    fn protocol(&self) -> &EfiFileProtocol {
+        // SAFETY: The handle was returned by OpenVolume() or Open(), and so it points to an
+        // EFI_FILE_PROTOCOL instance, which remains valid until it is closed.
+        unsafe { &*self.0 }
+    }
+}
+
+impl Drop for OpenFile {
+    fn drop(&mut self) {
+        if let Some(close) = self.protocol().close {
+            // SAFETY: `close` is the Close() member of the handle, which is not used again.
+            unsafe { close(self.0) };
+        }
+    }
+}
+
+/// Loads the file that `file_path` refers to into a FileBuffer, using the simple file system
+/// protocol that is installed on `handle`. `file_path` must consist of file path media device path
+/// nodes, which are opened in turn, starting from the root directory of the volume.
+fn load_file_from_volume(handle: Handle, file_path: &DevicePath) -> Result<FileBuffer, Status> {
+    let interface = EFI
+        .protocol_db
+        .borrow()
+        .get(&(handle, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID))
+        .map_or(ptr::null(), |p| p.as_proto_ptr());
+    let volume = interface as *mut EfiSimpleFileSystemProtocol;
+    // SAFETY: The interface pointer of a simple file system protocol is either NULL or points to an
+    // EFI_SIMPLE_FILE_SYSTEM_PROTOCOL instance.
+    let Some(open_volume) = unsafe { volume.as_ref() }.and_then(|v| v.open_volume) else {
+        return Err(Status::EFI_NOT_FOUND);
+    };
+    let mut root = ptr::null_mut();
+    // SAFETY: `open_volume` is the OpenVolume() member of `volume`, which is passed a pointer to a
+    // writable location.
+    let status = unsafe { open_volume(volume, &mut root) };
+    if status != Status::EFI_SUCCESS || root.is_null() {
+        return Err(file_error(status));
+    }
+
+    let mut file = OpenFile(root);
+    let mut node = file_path;
+    while node._type != DevicePathType::EFI_DEV_END_PATH {
+        if node._type != DevicePathType::EFI_DEV_MEDIA
+            || node.subtype != DevicePathSubtype::EFI_DEV_MEDIA_FILE_PATH
+        {
+            return Err(Status::EFI_NOT_FOUND);
+        }
+        let open = file.protocol().open.ok_or(Status::EFI_DEVICE_ERROR)?;
+        let name = node.file_path_name();
+        let mut next = ptr::null_mut();
+        // SAFETY: `open` is the Open() member of the handle, which is passed a pointer to a
+        // writable location, and a NUL terminated file name.
+        let status = unsafe { open(file.0, &mut next, name.as_ptr(), EFI_FILE_MODE_READ, 0) };
+        if status != Status::EFI_SUCCESS || next.is_null() {
+            return Err(file_error(status));
+        }
+        // This closes the handle of the directory that the file was opened relative to
+        file = OpenFile(next);
+        // SAFETY: `node` is not an end node, and so it is followed by another node, given that
+        // the caller checked that the device path that `file_path` is a part of is well formed.
+        node = unsafe { node.next() };
+    }
+
+    // Query the size of the EFI_FILE_INFO structure first, and then retrieve it, to obtain the size
+    // of the file, which must not be a directory
+    let get_info = file.protocol().get_info.ok_or(Status::EFI_DEVICE_ERROR)?;
+    let mut info_size = 0;
+    // SAFETY: `get_info` is the GetInfo() member of the handle, which is passed a valid GUID, and a
+    // pointer to a valid UINTN that indicates that no buffer is provided.
+    let status = unsafe { get_info(file.0, &EFI_FILE_INFO_ID, &mut info_size, ptr::null_mut()) };
+    if status != Status::EFI_BUFFER_TOO_SMALL {
+        return Err(file_error(status));
+    }
+    if info_size < SIZE_OF_EFI_FILE_INFO {
+        return Err(Status::EFI_DEVICE_ERROR);
+    }
+    // Use u64 words for the buffer, so that the UINT64 fields of the structure are aligned
+    let mut info = alloc::vec![0u64; info_size.div_ceil(size_of::<u64>())];
+    // SAFETY: `get_info` is the GetInfo() member of the handle, which is passed a valid GUID, and a
+    // pointer to a valid UINTN that holds the size of `info`.
+    let status = unsafe {
+        get_info(
+            file.0,
+            &EFI_FILE_INFO_ID,
+            &mut info_size,
+            info.as_mut_ptr().cast(),
+        )
+    };
+    if status != Status::EFI_SUCCESS {
+        return Err(file_error(status));
+    }
+    // FileSize and Attribute are at offsets 8 and 72, respectively
+    let (size, attribute) = (info[1], info[9]);
+    if attribute & EFI_FILE_DIRECTORY != 0 {
+        return Err(Status::EFI_NOT_FOUND);
+    }
+    // An empty file cannot be loaded as an image
+    let size = usize::try_from(size).or(Err(Status::EFI_OUT_OF_RESOURCES))?;
+    if size == 0 {
+        return Err(Status::EFI_LOAD_ERROR);
+    }
+
+    let read = file.protocol().read.ok_or(Status::EFI_DEVICE_ERROR)?;
+    let mut buffer = FileBuffer::new(size).ok_or(Status::EFI_OUT_OF_RESOURCES)?;
+    let base = buffer.pages.as_mut_ptr();
+    let mut done = 0;
+    while done < size {
+        let mut len = size - done;
+        // SAFETY: `read` is the Read() member of the handle, which is passed a pointer to a valid
+        // UINTN that holds the size of the remaining part of the buffer, which is valid for writes
+        // of that many bytes.
+        let status = unsafe { read(file.0, &mut len, base.add(done).cast()) };
+        if status != Status::EFI_SUCCESS {
+            return Err(file_error(status));
+        }
+        // Reading at the end of the file returns no data
+        if len == 0 {
+            break;
+        }
+        done += len.min(size - done);
+    }
+    buffer.size = done;
+    Ok(buffer)
+}
+
+/// Loads the image file that `device_path` refers to into a FileBuffer. As the UEFI spec requires,
+/// the simple file system protocol of the device that most closely matches `device_path` is used,
+/// if there is one. Otherwise, the LoadFile2 protocol is used, but only if `boot_policy` is FALSE.
+/// (The load file protocol, which the UEFI spec requires to be used in the other cases, is not
+/// supported.) Returns the FileBuffer, along with the handle of the device that was used, and the
+/// remaining part of `device_path`, which identifies the file on that device.
+fn load_file(
+    device_path: &DevicePath,
+    boot_policy: Bool,
+) -> Result<(FileBuffer, Handle, &DevicePath), Status> {
+    let volume = find_device(
+        &EFI.protocol_db.borrow(),
+        &EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
+        device_path,
+    );
+    if let Some((handle, file_path)) = volume {
+        return Ok((load_file_from_volume(handle, file_path)?, handle, file_path));
+    }
+    if boot_policy != 0 {
+        return Err(Status::EFI_NOT_FOUND);
+    }
+    let found = find_device(
+        &EFI.protocol_db.borrow(),
+        &EFI_LOAD_FILE2_PROTOCOL_GUID,
+        device_path,
+    );
+    let (handle, file_path) = found.ok_or(Status::EFI_NOT_FOUND)?;
+    Ok((load_file2(handle, file_path)?, handle, file_path))
 }
 
 extern "efiapi" fn load_image(
@@ -1047,23 +1210,14 @@ extern "efiapi" fn load_image(
             };
 
             let (device_handle, file_path) = if source_buffer.is_null() {
-                // Load the image file using the LoadFile2 protocol of the device that the device
-                // path refers to. (The UEFI spec gives precedence to the simple file system
-                // protocol, and falls back to the load file protocol, which is the only one that
-                // may be used if BootPolicy is TRUE, but neither of those is supported.)
-                if boot_policy != 0 {
-                    return Status::EFI_NOT_FOUND;
-                }
-                let found =
-                    find_device(&EFI.protocol_db.borrow(), &EFI_LOAD_FILE2_PROTOCOL_GUID, dp);
-                let Some((device_handle, file_path)) = found else {
-                    return Status::EFI_NOT_FOUND;
-                };
-                match load_file2(device_handle, file_path) {
-                    Ok(f) => file = Some(f),
+                // Load the image file from the device that the device path refers to
+                match load_file(dp, boot_policy) {
+                    Ok((f, device_handle, file_path)) => {
+                        file = Some(f);
+                        (device_handle, file_path)
+                    }
                     Err(status) => return status,
                 }
-                (device_handle, file_path)
             } else {
                 // If no device matches, the device path is recorded in its entirety
                 let found = find_device(

@@ -5,6 +5,7 @@
 use crate::EfiProtocol;
 use crate::{guid, Guid};
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::mem::size_of;
 
 pub const EFI_DEVICE_PATH_PROTOCOL_GUID: Guid = guid!(
@@ -33,6 +34,7 @@ pub struct DevicePathSubtype(pub u8);
 
 impl DevicePathSubtype {
     pub const EFI_DEV_MEDIA_VENDOR: Self = Self(3);
+    pub const EFI_DEV_MEDIA_FILE_PATH: Self = Self(4);
     pub const EFI_DEV_END_ENTIRE: Self = Self(0xff);
 }
 
@@ -170,5 +172,31 @@ impl DevicePath {
         // SAFETY: size() returns the size of the entire device path, which covers `size` bytes.
         let bytes = unsafe { core::slice::from_raw_parts(self as *const Self as *const u8, size) };
         Some(Box::from(bytes))
+    }
+
+    /// Returns the node that follows this one.
+    ///
+    /// # Safety
+    ///
+    /// This node must not be an end node, and it must be part of a well formed device path, i.e.,
+    /// one for which size() returns a value.
+    pub(crate) unsafe fn next(&self) -> &DevicePath {
+        // SAFETY: The caller guarantees that this node is followed by another node, at the offset
+        // given by its size field.
+        unsafe { &*((self as *const Self as *const u8).add(self.size as usize) as *const Self) }
+    }
+
+    /// Returns the path name of a file path media device path node, as a NUL terminated string.
+    /// The path name may not be aligned, and so it is returned as a copy.
+    pub(crate) fn file_path_name(&self) -> Vec<u16> {
+        let len = (self.size as usize).saturating_sub(size_of::<DevicePath>()) / 2;
+        let name = (self as *const Self as *const u8).wrapping_add(size_of::<DevicePath>());
+        let mut path: Vec<u16> = (0..len)
+            // SAFETY: The node covers `len` characters following its header.
+            .map(|i| unsafe { (name as *const u16).add(i).read_unaligned() })
+            .take_while(|&c| c != 0)
+            .collect();
+        path.push(0);
+        path
     }
 }
