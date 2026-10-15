@@ -770,15 +770,16 @@ fn compare_device_path(
         return None;
     }
 
-    // Check whether the provided device path is a prefix
-    // of the device path in the protocol database
+    // Check whether the device path in the protocol database is a prefix of the provided device
+    // path, i.e., whether the handle is a device on that device path
     // SAFETY: `entry` is a device path protocol instance, and so its non-NULL interface pointer
     // points to a device path, which remains valid for as long as the protocol is installed.
     let dp = unsafe { &*(p as *const DevicePath) };
-    let bytes_equal = device_path.is_prefix_of(dp)?;
+    let bytes_equal = dp.is_prefix_of(device_path)?;
 
-    // SAFETY: is_prefix_of() returns the combined size of the nodes of `device_path` that precede
-    // its end node, and so the resulting pointer points to that end node.
+    // SAFETY: is_prefix_of() returns the combined size of the nodes of `dp` that precede its end
+    // node, which are equal to the leading nodes of `device_path`, and so the resulting pointer
+    // points to the remaining part of `device_path`.
     let devpathptr = unsafe { (device_path as *const _ as *const u8).offset(bytes_equal) };
     Some((bytes_equal, (entry.0 .0, devpathptr as *const ())))
 }

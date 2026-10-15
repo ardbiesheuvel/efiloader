@@ -1020,7 +1020,6 @@ fn locate_device_path_direct_match() {
 /// handle to the device that is closest to DevicePath. DevicePath is advanced over the device path
 /// nodes that were matched."
 #[test]
-#[ignore = "efiloader matches handles whose device path starts with DevicePath, not vice versa"]
 fn locate_device_path_closest_match() {
     let efi = setup();
     let bs = efi.bs();
@@ -1054,7 +1053,6 @@ fn locate_device_path_closest_match() {
 
 /// LocateDevicePath() only considers handles that support Protocol.
 #[test]
-#[ignore = "efiloader matches handles whose device path starts with DevicePath, not vice versa"]
 fn locate_device_path_requires_protocol() {
     let efi = setup();
     let bs = efi.bs();
@@ -1088,7 +1086,6 @@ fn locate_device_path_requires_protocol() {
 
 /// LocateDevicePath() returns EFI_NOT_FOUND if "No handles matched the search".
 #[test]
-#[ignore = "efiloader matches handles whose device path starts with DevicePath, not vice versa"]
 fn locate_device_path_not_found() {
     let efi = setup();
     let bs = efi.bs();
