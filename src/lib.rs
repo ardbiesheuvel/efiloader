@@ -324,6 +324,10 @@ pub struct EfiContext {
     pub(crate) mapper: Box<dyn MemoryMapper>,
     pub(crate) rng: Option<Box<dyn Random>>,
     image_verifier: RefCell<Option<Box<dyn ImageVerifier>>>,
+    /// The limit on the total time that images may stall for, in microseconds, if any
+    stall_limit: Cell<Option<u64>>,
+    /// The total time that images stalled for so far, in microseconds
+    stalled: Cell<u64>,
 
     bs: RefCell<Box<BootServices>>,
     rt: RefCell<PoolBox<RuntimeServices>>,
@@ -410,6 +414,8 @@ pub fn init(
             mapper: Box::new(mapper),
             rng: rng.map(|r| Box::new(r) as _),
             image_verifier: RefCell::new(None),
+            stall_limit: Cell::new(None),
+            stalled: Cell::new(0),
 
             bs: RefCell::new(bs),
             rt: RefCell::new(rt),
@@ -665,6 +671,25 @@ impl EfiContext {
         let mut bs = self.bs.borrow_mut();
         bs.stall = f;
         bs.update_crc();
+    }
+
+    /// Limits the total time that EFI images may stall for via the Stall() boot service to
+    /// `micro_seconds`. Stall() returns immediately without waiting, but the image that exceeds
+    /// the limit is terminated as if it had called Exit() with EFI_TIMEOUT, and so is every image
+    /// that calls Stall() after that. This prevents images that wait indefinitely, e.g., by calling
+    /// Stall() in an infinite loop after a fatal error, from hanging the embedder. The limit has
+    /// no effect if Stall() is overridden via
+    /// [`override_stall_handler`](Self::override_stall_handler).
+    pub fn set_stall_limit(&self, micro_seconds: u64) {
+        self.stall_limit.set(Some(micro_seconds));
+    }
+
+    /// Accounts for an image stalling for `micro_seconds`, and returns whether the total time that
+    /// images stalled for now exceeds the stall limit, if any
+    pub(crate) fn account_stall(&self, micro_seconds: usize) -> bool {
+        let stalled = self.stalled.get().saturating_add(micro_seconds as u64);
+        self.stalled.set(stalled);
+        self.stall_limit.get().is_some_and(|limit| stalled > limit)
     }
 
     fn write_string(s: &str) {

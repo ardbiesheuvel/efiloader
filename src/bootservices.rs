@@ -1373,7 +1373,16 @@ extern "efiapi" fn get_next_monotonic_count(_count: *mut u64) -> Status {
     Status::EFI_SUCCESS
 }
 
-extern "efiapi" fn stall(_micro_seconds: usize) -> Status {
+extern "efiapi" fn stall(micro_seconds: usize) -> Status {
+    // Stall() returns immediately, as waiting would serve no purpose. But an image that exceeds
+    // the limit that the embedder may have imposed on the total time that images stall for is
+    // terminated, as it may be waiting for something that will never happen, e.g., in an infinite
+    // loop after a fatal error.
+    if EFI.account_stall(micro_seconds) {
+        let image = current_image();
+        log::warn!("Stall(): stall limit exceeded, terminating image {image:#x}");
+        return exit(image, Status::EFI_TIMEOUT, 0, ptr::null());
+    }
     Status::EFI_SUCCESS
 }
 
