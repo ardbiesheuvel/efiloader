@@ -211,6 +211,14 @@ pub trait FileLoader {
     ) -> Result<(), &str>;
 }
 
+/// An implementation of this trait may be provided to the EFI runtime via
+/// [`EfiContext::set_image_verifier`], to authenticate the image files that EFI images load from a
+/// volume or via the LoadFile2 protocol, e.g., by checking their signatures.
+pub trait ImageVerifier {
+    /// Returns whether the image file `image` may be loaded
+    fn verify(&self, image: &[u8]) -> bool;
+}
+
 /// An implementation of this trait may be provided to the EFI runtime at initialization time so
 /// that the PE/COFF loader and the EFI random number generator protocol have access to a source of
 /// random numbers.
@@ -315,6 +323,7 @@ pub struct EfiContext {
     pub(crate) memmap: MemoryMap,
     pub(crate) mapper: Box<dyn MemoryMapper>,
     pub(crate) rng: Option<Box<dyn Random>>,
+    image_verifier: RefCell<Option<Box<dyn ImageVerifier>>>,
 
     bs: RefCell<Box<BootServices>>,
     rt: RefCell<PoolBox<RuntimeServices>>,
@@ -400,6 +409,7 @@ pub fn init(
             memmap: memmap,
             mapper: Box::new(mapper),
             rng: rng.map(|r| Box::new(r) as _),
+            image_verifier: RefCell::new(None),
 
             bs: RefCell::new(bs),
             rt: RefCell::new(rt),
@@ -500,6 +510,26 @@ impl EfiContext {
     /// device path.
     pub fn set_initrd_loader(&self, initrd: impl FileLoader + Send + 'static) {
         initrdloadfile2::install(self, initrd);
+    }
+
+    /// Installs `verifier` to authenticate the image files that EFI images load via LoadImage()
+    /// without passing a source buffer, i.e., from a volume or via the LoadFile2 protocol, such as
+    /// the addons that systemd-stub loads. LoadImage() returns EFI_ACCESS_DENIED for image files
+    /// that are rejected. Images that EFI images load from memory are not verified, as they are
+    /// under the control of the image that loads them, which can run arbitrary code anyway.
+    ///
+    /// The verifier must not call back into the EFI runtime.
+    pub fn set_image_verifier(&self, verifier: impl ImageVerifier + 'static) {
+        *self.image_verifier.borrow_mut() = Some(Box::new(verifier));
+    }
+
+    /// Returns whether the image file `image` passes the verification by the image verifier, if
+    /// one was installed
+    pub(crate) fn verify_image(&self, image: &[u8]) -> bool {
+        match self.image_verifier.borrow().as_ref() {
+            Some(verifier) => verifier.verify(image),
+            None => true,
+        }
     }
 
     /// Installs a read-only volume that exposes the files and directories in the cpio archive

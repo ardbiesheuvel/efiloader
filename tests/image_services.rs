@@ -780,26 +780,6 @@ fn load_image_frees_file_loaded_via_load_file2() {
     }
 }
 
-/// Returns the nodes of the device path of `handle`, without the end node
-fn device_nodes(efi: &Efi, handle: Handle) -> Vec<u8> {
-    let dp = efi
-        .handle_protocol(handle, &EFI_DEVICE_PATH_PROTOCOL_GUID)
-        .unwrap();
-    // SAFETY: The interface is a device path.
-    let bytes = unsafe { device_path_bytes(dp.cast()) };
-    bytes[..bytes.len() - END_NODE.len()].to_vec()
-}
-
-/// Returns the number of EfiBootServicesData pages in the memory map
-fn boot_services_data_pages(efi: &Efi) -> u64 {
-    efi.memory_map()
-        .sorted()
-        .iter()
-        .filter(|d| d.r#type == EFI_BOOT_SERVICES_DATA)
-        .map(|d| d.number_of_pages)
-        .sum()
-}
-
 /// LoadImage(): "If SourceBuffer is NULL, the function is a file copy operation that uses the
 /// EFI_SIMPLE_FILE_SYSTEM_PROTOCOL." "In the case of EFI_SIMPLE_FILE_SYSTEM_PROTOCOL, the path name
 /// from the File Path Media Device Path node(s) of DevicePath is used." Unlike the LoadFile2
@@ -813,13 +793,16 @@ fn load_image_from_simple_file_system() {
         .file("EFI/BOOT/IMAGE.EFI", &pe_image(returning_entry))
         .finish();
     let volume = efi.install_cpio_volume(archive);
-    let device = device_nodes(&efi, volume);
+    let device = efi.device_nodes(volume);
     let file = file_path_node("\\EFI\\BOOT\\IMAGE.EFI");
     for boot_policy in [0, 1] {
         // The buffer that the file is loaded into is freed again
-        let pages = boot_services_data_pages(&efi);
+        let pages = efi.memory_map().pages_of_type(EFI_BOOT_SERVICES_DATA);
         let image = load_image_from_device_path(&efi, boot_policy, &[&device, &file]).unwrap();
-        assert_eq!(boot_services_data_pages(&efi), pages);
+        assert_eq!(
+            efi.memory_map().pages_of_type(EFI_BOOT_SERVICES_DATA),
+            pages
+        );
 
         let li = loaded_image(&efi, image);
         assert_eq!(li.device_handle, volume);
@@ -851,7 +834,7 @@ fn load_image_prefers_simple_file_system_to_load_file2() {
     let file = file_path_node("\\IMAGE.EFI");
     let server = install_file_server_on(&efi, volume, &[&file], pe_image(returning_entry));
 
-    load_image_from_device_path(&efi, 0, &[&device_nodes(&efi, volume), &file]).unwrap();
+    load_image_from_device_path(&efi, 0, &[&efi.device_nodes(volume), &file]).unwrap();
     assert!(server.calls.borrow().is_empty());
 }
 
@@ -869,8 +852,8 @@ fn load_image_from_simple_file_system_fails_gracefully() {
         .file("EFI/BOOT/TEXT.TXT", b"not an image")
         .finish();
     let volume = efi.install_cpio_volume(archive);
-    let device = device_nodes(&efi, volume);
-    let pages = boot_services_data_pages(&efi);
+    let device = efi.device_nodes(volume);
+    let pages = efi.memory_map().pages_of_type(EFI_BOOT_SERVICES_DATA);
     for (nodes, status) in [
         (
             vec![file_path_node("\\EFI\\BOOT\\MISSING.EFI")],
@@ -892,7 +875,10 @@ fn load_image_from_simple_file_system_fails_gracefully() {
         let mut path: Vec<&[u8]> = vec![&device];
         path.extend(nodes.iter().map(Vec::as_slice));
         assert_eq!(load_image_from_device_path(&efi, 0, &path), Err(status));
-        assert_eq!(boot_services_data_pages(&efi), pages);
+        assert_eq!(
+            efi.memory_map().pages_of_type(EFI_BOOT_SERVICES_DATA),
+            pages
+        );
     }
 }
 

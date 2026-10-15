@@ -934,7 +934,8 @@ struct FileBuffer {
 }
 
 impl FileBuffer {
-    /// Allocates a buffer for a file of `size` bytes
+    /// Allocates a buffer for a file of `size` bytes, which is cleared, so that all of it is
+    /// initialized, regardless of how much of it the file is loaded into.
     fn new(size: usize) -> Option<Self> {
         let pages = size.checked_add(EFI_PAGE_MASK)? >> EFI_PAGE_SHIFT;
         let pages = EFI.memmap.allocate_pages(
@@ -942,7 +943,14 @@ impl FileBuffer {
             EfiMemoryType::EfiBootServicesData,
             Placement::Anywhere,
         )?;
+        pages.fill(MaybeUninit::new(0));
         Some(FileBuffer { pages, size })
+    }
+
+    /// Returns the contents of the file
+    fn bytes(&self) -> &[u8] {
+        // SAFETY: All of the buffer was initialized by new(), and `size` does not exceed its size.
+        unsafe { slice::from_raw_parts(self.pages.as_ptr() as *const u8, self.size) }
     }
 
     /// Returns a FileLoader that loads the file from the buffer
@@ -1210,8 +1218,13 @@ extern "efiapi" fn load_image(
             };
 
             let (device_handle, file_path) = if source_buffer.is_null() {
-                // Load the image file from the device that the device path refers to
+                // Load the image file from the device that the device path refers to, and check
+                // whether the embedder permits it to be loaded
                 match load_file(dp, boot_policy) {
+                    Ok((f, _, _)) if !EFI.verify_image(f.bytes()) => {
+                        log::warn!("LoadImage(): image file rejected by verifier");
+                        return Status::EFI_ACCESS_DENIED;
+                    }
                     Ok((f, device_handle, file_path)) => {
                         file = Some(f);
                         (device_handle, file_path)

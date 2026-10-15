@@ -945,6 +945,16 @@ impl Efi {
             .install_cpio_volume(MemFile(archive), &new_guid())
             .unwrap()
     }
+
+    /// Returns the nodes of the device path of `handle`, without the end node
+    pub fn device_nodes(&self, handle: Handle) -> Vec<u8> {
+        let dp = self
+            .handle_protocol(handle, &EFI_DEVICE_PATH_PROTOCOL_GUID)
+            .unwrap();
+        // SAFETY: The interface is a device path.
+        let bytes = unsafe { device_path_bytes(dp.cast()) };
+        bytes[..bytes.len() - END_NODE.len()].to_vec()
+    }
 }
 
 /// A copy of the memory map as returned by GetMemoryMap()
@@ -990,6 +1000,15 @@ impl MemoryMap {
             covered = d.end();
         }
         memory_type.filter(|_| covered >= range.end)
+    }
+
+    /// Returns the number of pages of type `memory_type`
+    pub fn pages_of_type(&self, memory_type: u32) -> u64 {
+        self.sorted()
+            .iter()
+            .filter(|d| d.r#type == memory_type)
+            .map(|d| d.number_of_pages)
+            .sum()
     }
 
     /// Returns the address of a range of `pages` free pages, i.e., EfiConventionalMemory, that is
