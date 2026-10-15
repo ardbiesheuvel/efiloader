@@ -128,17 +128,10 @@ impl MemoryMap {
         let align = core::mem::align_of::<T>().max(16);
         let layout = Layout::from_size_align(size, align).or(Err("Layout error"))?;
         let mut db = self.pool_alloc_db.borrow_mut();
-        let alloc = &mut db.allocators;
-        if !alloc.contains_key(&pool_type) {
-            alloc.insert(
-                pool_type,
-                PoolAllocator::new(pool_type, self)
-                    .or(Err("Failed to insert new pool allocator"))?,
-            );
-        }
-        let p = alloc
-            .get_mut(&pool_type)
-            .unwrap()
+        let p = db
+            .allocators
+            .entry(pool_type)
+            .or_insert_with(|| PoolAllocator::new(pool_type))
             .allocate(layout, self)
             .or(Err("Failed to allocate from pool"))?;
         let a = PoolAllocation {
@@ -173,7 +166,7 @@ impl MemoryMap {
         db.allocators
             .get_mut(&a.pool_type)
             .unwrap()
-            .deallocate(buffer, a.layout);
+            .deallocate(buffer, a.layout, self);
         Ok(())
     }
 

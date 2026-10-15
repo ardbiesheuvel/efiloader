@@ -762,7 +762,6 @@ fn allocate_pool_allocates_memory_of_pool_type() {
 /// AllocatePool() supports all memory types that UEFI images are permitted to allocate, e.g.,
 /// "UEFI boot service drivers must allocate memory (and pool) of type EfiBootServicesData".
 #[test]
-#[ignore = "efiloader only supports pools of EfiLoaderData, EfiBootServicesData, EfiRuntimeServicesData and EfiACPIReclaimMemory"]
 fn allocate_pool_of_each_memory_type() {
     let efi = setup();
     let bs = efi.bs();
@@ -784,7 +783,6 @@ fn allocate_pool_of_each_memory_type() {
 /// type", and so allocations succeed as long as sufficient free memory is available, regardless of
 /// whether that memory is requested by a single large allocation or by many small ones.
 #[test]
-#[ignore = "efiloader never grows a pool beyond its initial 1 MiB region"]
 fn allocate_pool_grows_pool() {
     let efi = setup();
     let bs = efi.bs();
@@ -845,7 +843,6 @@ fn allocate_pool_out_of_resources() {
 /// FreePool() "returns pool memory to the system", and so it can be allocated again. This
 /// allocates and frees much more memory than exists in total.
 #[test]
-#[ignore = "efiloader never grows a pool beyond its initial 1 MiB region"]
 fn free_pool_returns_memory_to_system() {
     let efi = setup();
     let bs = efi.bs();
