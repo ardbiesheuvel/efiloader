@@ -1399,7 +1399,6 @@ fn close_protocol_closes_open_protocol() {
 /// "ControllerHandle is not NULL and ControllerHandle is not a valid EFI_HANDLE" or "Protocol is
 /// NULL".
 #[test]
-#[ignore = "efiloader does not validate AgentHandle and ControllerHandle"]
 fn close_protocol_rejects_invalid_parameters() {
     let efi = setup();
     let bs = efi.bs();
@@ -1438,28 +1437,33 @@ fn close_protocol_rejects_invalid_parameters() {
 }
 
 /// CloseProtocol() returns EFI_NOT_FOUND if "Handle does not support the protocol specified by
-/// Protocol" or "The protocol interface specified by Handle and Protocol is not currently open by
-/// AgentHandle and ControllerHandle".
+/// Protocol".
+#[test]
+fn close_protocol_rejects_unsupported_protocol() {
+    let efi = setup();
+    let bs = efi.bs();
+
+    let handle = efi
+        .install_protocol(0, &new_guid(), new_interface())
+        .unwrap();
+    // SAFETY: All pointers are valid.
+    let status = unsafe { (bs.close_protocol)(handle, &new_guid(), efi.image_handle(), 0) };
+    assert_eq!(status, Status::EFI_NOT_FOUND);
+}
+
+/// CloseProtocol() returns EFI_NOT_FOUND if "The protocol interface specified by Handle and
+/// Protocol is not currently open by AgentHandle and ControllerHandle".
 #[test]
 #[ignore = "efiloader does not keep track of open protocols"]
 fn close_protocol_rejects_protocol_that_is_not_open() {
     let efi = setup();
     let bs = efi.bs();
     let guid = new_guid();
-    let agent = efi.image_handle();
 
     let handle = efi.install_protocol(0, &guid, new_interface()).unwrap();
     // SAFETY: All pointers are valid.
-    unsafe {
-        assert_eq!(
-            (bs.close_protocol)(handle, &new_guid(), agent, 0),
-            Status::EFI_NOT_FOUND
-        );
-        assert_eq!(
-            (bs.close_protocol)(handle, &guid, agent, 0),
-            Status::EFI_NOT_FOUND
-        );
-    }
+    let status = unsafe { (bs.close_protocol)(handle, &guid, efi.image_handle(), 0) };
+    assert_eq!(status, Status::EFI_NOT_FOUND);
 }
 
 /// ProtocolsPerHandle() "retrieves the list of protocol interface GUIDs that are installed on

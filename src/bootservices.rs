@@ -1088,11 +1088,24 @@ extern "efiapi" fn open_protocol(
 extern "efiapi" fn close_protocol(
     handle: Handle,
     protocol: *const Guid,
-    _agent_handle: Handle,
-    _controller_handle: Handle,
+    agent_handle: Handle,
+    controller_handle: Handle,
 ) -> Status {
-    if handle == 0 || protocol.is_null() {
+    if handle == 0 || agent_handle == 0 || protocol.is_null() {
         return Status::EFI_INVALID_PARAMETER;
+    }
+
+    // SAFETY: `protocol` is not NULL, and the UEFI spec requires it to point to a valid EFI_GUID.
+    let protocol = unsafe { &*protocol };
+    let db = EFI.protocol_db.borrow();
+    if controller_handle != 0 && !handle_exists(&db, controller_handle) {
+        return Status::EFI_INVALID_PARAMETER;
+    }
+
+    // Open protocol information is not tracked, and so protocols that are installed are assumed to
+    // have been opened by the caller.
+    if !db.contains_key(&(handle, *protocol)) {
+        return Status::EFI_NOT_FOUND;
     }
     Status::EFI_SUCCESS
 }
