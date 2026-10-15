@@ -766,7 +766,7 @@ fn compare_device_path(
     protocol: &Guid,
     device_path: &DevicePath,
     db: &ProtocolDb,
-) -> Option<(isize, (Handle, *const ()))> {
+) -> Option<(isize, Handle)> {
     // Check if this handle implements both the device path protocol
     // and the requested protocol
     let guid = &entry.0 .1;
@@ -781,13 +781,29 @@ fn compare_device_path(
     // SAFETY: `entry` is a device path protocol instance, and so its non-NULL interface pointer
     // points to a device path, which remains valid for as long as the protocol is installed.
     let dp = unsafe { &*(p as *const DevicePath) };
-    let bytes_equal = dp.is_prefix_of(device_path)?;
+    Some((dp.is_prefix_of(device_path)?, entry.0 .0))
+}
 
-    // SAFETY: is_prefix_of() returns the combined size of the nodes of `dp` that precede its end
-    // node, which are equal to the leading nodes of `device_path`, and so the resulting pointer
-    // points to the remaining part of `device_path`.
-    let devpathptr = unsafe { (device_path as *const _ as *const u8).offset(bytes_equal) };
-    Some((bytes_equal, (entry.0 .0, devpathptr as *const ())))
+/// Finds the handle that has both `protocol` and the device path protocol installed, and whose
+/// device path has the most bytes in common with `device_path`, if any. Returns the handle along
+/// with the remaining part of `device_path`, i.e., the part that follows the matching nodes.
+fn find_device<'a>(
+    db: &ProtocolDb,
+    protocol: &Guid,
+    device_path: &'a DevicePath,
+) -> Option<(Handle, &'a DevicePath)> {
+    let (bytes_equal, handle) = db
+        .iter()
+        .filter_map(|entry| compare_device_path(entry, protocol, device_path, db))
+        .max_by(|a, b| a.0.cmp(&b.0))?;
+
+    // SAFETY: is_prefix_of() returns the combined size of the nodes of the device path of `handle`
+    // that precede its end node, which are equal to the leading nodes of `device_path`, and so the
+    // resulting pointer points to the remaining part of `device_path`.
+    let remaining = unsafe {
+        &*((device_path as *const DevicePath as *const u8).offset(bytes_equal) as *const DevicePath)
+    };
+    Some((handle, remaining))
 }
 
 extern "efiapi" fn locate_device_path(
@@ -803,31 +819,19 @@ extern "efiapi" fn locate_device_path(
     // a valid EFI_GUID and to a pointer to a valid device path, respectively.
     let (protocol, devpath) = unsafe { (&*protocol, &**device_path) };
 
-    // Find all handles that have both the given protocol and
-    // the DevicePath protocol installed, and classify them by
-    // how many bytes the device path has in common with the
-    // provided one, if any
-    let db = EFI.protocol_db.borrow();
-    let ret = if let Some(entry) = db
-        .iter()
-        .filter_map(|entry: (&(Handle, Guid), &ProtocolEntry)| {
-            compare_device_path(entry, protocol, devpath, &db)
-        })
-        .max_by(|a, b| a.0.cmp(&b.0))
-    {
-        if !device.is_null() {
+    let found = find_device(&EFI.protocol_db.borrow(), protocol, devpath);
+    let ret = match found {
+        Some((handle, remaining)) if !device.is_null() => {
             // SAFETY: Neither `device` nor `device_path` are NULL, and the UEFI spec requires them
             // to point to writable locations of the appropriate types.
             unsafe {
-                *device = entry.1 .0;
-                *device_path = entry.1 .1 as _;
+                *device = handle;
+                *device_path = remaining;
             }
             Status::EFI_SUCCESS
-        } else {
-            Status::EFI_INVALID_PARAMETER
         }
-    } else {
-        Status::EFI_NOT_FOUND
+        Some(_) => Status::EFI_INVALID_PARAMETER,
+        None => Status::EFI_NOT_FOUND,
     };
     log::trace!("LocateDevicePath() {protocol:02x?} {ret:?}");
     ret
