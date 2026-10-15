@@ -62,6 +62,7 @@ use crate::{
     peloader::*, rng::*, runtimeservices::*, simpletext::*, systemtable::*, tableheader::EfiTable,
     EfiMemoryType::*,
 };
+use crate::{devicepath::VendorMediaDevicePath, simplefilesystem::CpioVolume};
 
 use core::cell::*;
 use core::mem::*;
@@ -83,6 +84,7 @@ pub mod bootservices;
 #[cfg(target_arch = "aarch64")]
 mod cmo;
 mod configtable;
+mod cpio;
 pub mod devicepath;
 mod initrdloadfile2;
 mod loadedimage;
@@ -93,6 +95,7 @@ mod peloader;
 mod poolalloc;
 mod rng;
 pub mod runtimeservices;
+mod simplefilesystem;
 mod simpletext;
 pub mod status;
 mod systemtable;
@@ -496,6 +499,31 @@ impl EfiContext {
     /// device path.
     pub fn set_initrd_loader(&self, initrd: impl FileLoader + Send + 'static) {
         initrdloadfile2::install(self, initrd);
+    }
+
+    /// Installs a read-only volume that exposes the files and directories in the cpio archive
+    /// provided by `archive` via the EFI simple file system protocol, along with a device path that
+    /// consists of a vendor defined media device path node, which identifies the volume by `guid`.
+    /// The GUID must be unique, so that EFI images can locate the volume by its device path.
+    /// Returns the handle of the volume, or an error if the archive is malformed.
+    ///
+    /// The archive must be in the "newc" format of the Linux initramfs, and may consist of several
+    /// concatenated archives. File names are case insensitive, as they are on FAT file systems.
+    pub fn install_cpio_volume(
+        &self,
+        archive: impl FileLoader + Send + 'static,
+        guid: &Guid,
+    ) -> Result<Handle, &'static str> {
+        let volume = CpioVolume::new(archive)?;
+        let handle = new_handle();
+        // Installing the protocols cannot fail, given that the handle is new
+        let _ = self.install_pinned_protocol(handle, Box::pin(volume), ProtocolOwner::Runtime);
+        let _ = self.install_pinned_protocol(
+            handle,
+            Box::pin(VendorMediaDevicePath::new(guid)),
+            ProtocolOwner::Runtime,
+        );
+        Ok(handle)
     }
 
     pub(crate) fn get_entropy(&self, buf: &mut [u8], use_raw: bool) -> bool {

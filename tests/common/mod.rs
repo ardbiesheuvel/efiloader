@@ -141,6 +141,48 @@ pub const EFI_LOAD_FILE2_PROTOCOL_GUID: Guid = Guid {
     data4: [0x99, 0x6d, 0x4a, 0x6c, 0x87, 0x24, 0xe0, 0x6d],
 };
 
+pub const EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID: Guid = Guid {
+    data1: 0x964e5b22,
+    data2: 0x6459,
+    data3: 0x11d2,
+    data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
+};
+pub const EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_REVISION: u64 = 0x00010000;
+
+pub const EFI_FILE_PROTOCOL_REVISION: u64 = 0x00010000;
+
+pub const EFI_FILE_MODE_READ: u64 = 0x0000000000000001;
+pub const EFI_FILE_MODE_WRITE: u64 = 0x0000000000000002;
+pub const EFI_FILE_MODE_CREATE: u64 = 0x8000000000000000;
+
+pub const EFI_FILE_READ_ONLY: u64 = 0x0000000000000001;
+pub const EFI_FILE_DIRECTORY: u64 = 0x0000000000000010;
+
+pub const EFI_FILE_INFO_ID: Guid = Guid {
+    data1: 0x09576e92,
+    data2: 0x6d3f,
+    data3: 0x11d2,
+    data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
+};
+pub const SIZE_OF_EFI_FILE_INFO: usize = 80;
+
+pub const EFI_FILE_SYSTEM_INFO_ID: Guid = Guid {
+    data1: 0x09576e93,
+    data2: 0x6d3f,
+    data3: 0x11d2,
+    data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
+};
+pub const SIZE_OF_EFI_FILE_SYSTEM_INFO: usize = 36;
+
+pub const EFI_FILE_SYSTEM_VOLUME_LABEL_ID: Guid = Guid {
+    data1: 0xdb47d7d3,
+    data2: 0xfe81,
+    data3: 0x11d3,
+    data4: [0x9a, 0x35, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d],
+};
+
+pub const EFI_UNSPECIFIED_TIMEZONE: i16 = 0x07ff;
+
 pub const EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID: Guid = Guid {
     data1: 0x387477c1,
     data2: 0x69c7,
@@ -253,6 +295,157 @@ pub struct LoadFile2Protocol {
         *mut usize,
         *mut c_void,
     ) -> Status,
+}
+
+/// EFI_SIMPLE_FILE_SYSTEM_PROTOCOL
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct SimpleFileSystemProtocol {
+    pub revision: u64,
+    pub open_volume:
+        unsafe extern "efiapi" fn(*mut SimpleFileSystemProtocol, *mut *mut FileProtocol) -> Status,
+}
+
+/// EFI_FILE_PROTOCOL, revision 1
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct FileProtocol {
+    pub revision: u64,
+    pub open: unsafe extern "efiapi" fn(
+        *mut FileProtocol,
+        *mut *mut FileProtocol,
+        *const Char16,
+        u64,
+        u64,
+    ) -> Status,
+    pub close: unsafe extern "efiapi" fn(*mut FileProtocol) -> Status,
+    pub delete: unsafe extern "efiapi" fn(*mut FileProtocol) -> Status,
+    pub read: unsafe extern "efiapi" fn(*mut FileProtocol, *mut usize, *mut c_void) -> Status,
+    pub write: unsafe extern "efiapi" fn(*mut FileProtocol, *mut usize, *const c_void) -> Status,
+    pub get_position: unsafe extern "efiapi" fn(*mut FileProtocol, *mut u64) -> Status,
+    pub set_position: unsafe extern "efiapi" fn(*mut FileProtocol, u64) -> Status,
+    pub get_info: unsafe extern "efiapi" fn(
+        *mut FileProtocol,
+        *const Guid,
+        *mut usize,
+        *mut c_void,
+    ) -> Status,
+    pub set_info:
+        unsafe extern "efiapi" fn(*mut FileProtocol, *const Guid, usize, *const c_void) -> Status,
+    pub flush: unsafe extern "efiapi" fn(*mut FileProtocol) -> Status,
+}
+
+/// EFI_TIME
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct EfiTime {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub pad1: u8,
+    pub nanosecond: u32,
+    pub time_zone: i16,
+    pub daylight: u8,
+    pub pad2: u8,
+}
+
+/// EFI_FILE_INFO, without the FileName that follows it
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct FileInfo {
+    pub size: u64,
+    pub file_size: u64,
+    pub physical_size: u64,
+    pub create_time: EfiTime,
+    pub last_access_time: EfiTime,
+    pub modification_time: EfiTime,
+    pub attribute: u64,
+}
+
+/// Parses the EFI_FILE_INFO structure in `buf`, and returns it along with the FileName
+pub fn parse_file_info(buf: &[u8]) -> (FileInfo, String) {
+    assert!(buf.len() >= SIZE_OF_EFI_FILE_INFO);
+    // SAFETY: `buf` covers an EFI_FILE_INFO structure.
+    let info: FileInfo = unsafe { ptr::read_unaligned(buf.as_ptr().cast()) };
+    assert_eq!(info.size as usize, buf.len());
+    (info, utf16_to_string(&buf[SIZE_OF_EFI_FILE_INFO..]))
+}
+
+/// Returns the NUL terminated UTF-16LE string at the start of `buf`
+pub fn utf16_to_string(buf: &[u8]) -> String {
+    let chars: Vec<u16> = (0..buf.len() / 2)
+        .map(|i| u16::from_le_bytes([buf[2 * i], buf[2 * i + 1]]))
+        .take_while(|&c| c != 0)
+        .collect();
+    String::from_utf16(&chars).unwrap()
+}
+
+/// Returns `s` as a NUL terminated UTF-16 string
+pub fn utf16z(s: &str) -> Vec<Char16> {
+    s.encode_utf16().chain([0]).collect()
+}
+
+pub const S_IFDIR: u32 = 0o040000;
+pub const S_IFREG: u32 = 0o100000;
+pub const S_IFLNK: u32 = 0o120000;
+
+/// A writer of cpio archives in the "newc" format of the Linux initramfs, as described in the
+/// cpio(5) man page
+#[derive(Default)]
+pub struct Cpio(pub Vec<u8>);
+
+impl Cpio {
+    /// Appends an entry for `path` with the given mode, modification time and contents
+    pub fn entry(mut self, path: &str, mode: u32, mtime: u32, data: &[u8]) -> Self {
+        let name_size = path.len() as u32 + 1;
+        let fields = [
+            0,
+            mode,
+            0,
+            0,
+            1,
+            mtime,
+            data.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            name_size,
+            0,
+        ];
+        self.0.extend_from_slice(b"070701");
+        for field in fields {
+            self.0.extend_from_slice(format!("{field:08X}").as_bytes());
+        }
+        self.0.extend_from_slice(path.as_bytes());
+        self.0.push(0);
+        self.align();
+        self.0.extend_from_slice(data);
+        self.align();
+        self
+    }
+
+    fn align(&mut self) {
+        self.0.resize(self.0.len().next_multiple_of(4), 0);
+    }
+
+    /// Appends a regular file
+    pub fn file(self, path: &str, data: &[u8]) -> Self {
+        self.entry(path, S_IFREG | 0o644, 0, data)
+    }
+
+    /// Appends a directory
+    pub fn dir(self, path: &str) -> Self {
+        self.entry(path, S_IFDIR | 0o755, 0, &[])
+    }
+
+    /// Appends the trailer, and returns the archive
+    pub fn finish(self) -> Vec<u8> {
+        self.entry("TRAILER!!!", 0, 0, &[]).0
+    }
 }
 
 /// EFI_BOOT_SERVICES
@@ -744,6 +937,14 @@ impl Efi {
             Err(status)
         }
     }
+
+    /// Installs a volume that exposes the files and directories in the cpio archive `archive`, and
+    /// returns its handle
+    pub fn install_cpio_volume(&self, archive: Vec<u8>) -> Handle {
+        self.context()
+            .install_cpio_volume(MemFile(archive), &new_guid())
+            .unwrap()
+    }
 }
 
 /// A copy of the memory map as returned by GetMemoryMap()
@@ -821,6 +1022,7 @@ pub fn new_interface() -> *mut c_void {
 pub const HARDWARE_DEVICE_PATH: u8 = 0x01;
 pub const HW_VENDOR_DP: u8 = 0x04;
 pub const MEDIA_DEVICE_PATH: u8 = 0x04;
+pub const MEDIA_VENDOR_DP: u8 = 0x03;
 pub const MEDIA_FILEPATH_DP: u8 = 0x04;
 pub const END_DEVICE_PATH_TYPE: u8 = 0x7f;
 pub const END_ENTIRE_DEVICE_PATH_SUBTYPE: u8 = 0xff;
