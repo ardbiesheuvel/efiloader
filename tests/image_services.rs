@@ -255,7 +255,6 @@ fn load_image_rejects_null_image_handle() {
 /// LoadImage() returns EFI_INVALID_PARAMETER if "ParentImageHandle is NULL" or
 /// "ParentImageHandle is not a valid EFI_HANDLE".
 #[test]
-#[ignore = "efiloader does not validate ParentImageHandle"]
 fn load_image_rejects_invalid_parent_image_handle() {
     let efi = setup();
     let bs = efi.bs();
@@ -280,7 +279,6 @@ fn load_image_rejects_invalid_parent_image_handle() {
 
 /// LoadImage() returns EFI_NOT_FOUND if "Both SourceBuffer and DevicePath are NULL".
 #[test]
-#[ignore = "efiloader returns EFI_UNSUPPORTED"]
 fn load_image_rejects_null_source_buffer_and_device_path() {
     let efi = setup();
     let bs = efi.bs();

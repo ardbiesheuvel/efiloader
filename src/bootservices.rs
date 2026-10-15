@@ -540,6 +540,13 @@ fn handle_exists(db: &ProtocolDb, handle: Handle) -> bool {
     db.keys().any(|k| k.0 == handle)
 }
 
+/// Returns whether `handle` is the handle of an image that was loaded by the EFI runtime. (Loaded
+/// image protocols installed by EFI images do not count.)
+fn is_image_handle(db: &ProtocolDb, handle: Handle) -> bool {
+    db.get(&(handle, EFI_LOADED_IMAGE_PROTOCOL_GUID))
+        .is_some_and(|p| p.owner == ProtocolOwner::Runtime)
+}
+
 /// Returns whether `interface` may be installed by an EFI image as a device path protocol
 /// instance: it must not be NULL, and it must not be an empty device path.
 ///
@@ -900,17 +907,26 @@ impl FileLoader for LoadImageFileLoader {
 
 extern "efiapi" fn load_image(
     _boot_policy: Bool,
-    _parent_image_handle: Handle,
-    _device_path: *const DevicePath,
+    parent_image_handle: Handle,
+    device_path: *const DevicePath,
     source_buffer: *const (),
     source_size: usize,
     image_handle: *mut Handle,
 ) -> Status {
     log::trace!("LoadImage()");
-    if image_handle.is_null() {
+    // The parent image handle is the caller's image handle
+    if image_handle.is_null() || !is_image_handle(&EFI.protocol_db.borrow(), parent_image_handle) {
         return Status::EFI_INVALID_PARAMETER;
     }
-    if source_buffer.is_null() || source_size == 0 {
+    if source_buffer.is_null() {
+        // Loading images from a device path is not supported
+        return if device_path.is_null() {
+            Status::EFI_NOT_FOUND
+        } else {
+            Status::EFI_UNSUPPORTED
+        };
+    }
+    if source_size == 0 {
         return Status::EFI_UNSUPPORTED;
     }
 
