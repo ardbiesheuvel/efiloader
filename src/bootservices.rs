@@ -1096,17 +1096,16 @@ extern "efiapi" fn protocols_per_handle(
     // writable locations of the appropriate types.
     let (buffer, count) = unsafe { (&mut *protocol_buffer, &mut *protocol_buffer_count) };
 
+    // The keys of the protocol database move around in memory when entries are added or removed,
+    // so return pointers to persistent copies of the GUIDs instead. This permits the caller to
+    // modify the protocol database while still using the GUID pointers, e.g., to uninstall all
+    // protocols from the handle.
     let guids: Vec<_> = EFI
         .protocol_db
         .borrow()
         .keys()
-        .filter_map(|k: &(Handle, Guid)| {
-            if k.0 == handle {
-                Some(&k.1 as *const Guid)
-            } else {
-                None
-            }
-        })
+        .filter(|k| k.0 == handle)
+        .map(|k| EFI.persistent_guid(&k.1))
         .collect();
 
     let ret = if let Ok(buf) = EFI

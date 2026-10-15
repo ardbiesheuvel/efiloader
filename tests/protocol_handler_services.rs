@@ -1433,7 +1433,6 @@ fn protocols_per_handle_returns_protocols() {
 /// ProtocolsPerHandle() returns pointers to GUIDs that remain valid while the protocols are being
 /// uninstalled, which is how callers typically use it to remove all protocols from a handle.
 #[test]
-#[ignore = "efiloader returns pointers into the protocol database, which move when it is modified"]
 fn protocols_per_handle_returns_stable_guid_pointers() {
     let efi = setup();
     let bs = efi.bs();

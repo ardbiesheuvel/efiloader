@@ -302,6 +302,10 @@ pub(crate) type ProtocolDb = BTreeMap<(Handle, Guid), ProtocolEntry>;
 pub struct EfiContext {
     cfgtable: ConfigTableDb,
     pub(crate) protocol_db: RefCell<ProtocolDb>,
+    /// Copies of GUIDs that were returned to EFI images by reference, e.g., by
+    /// ProtocolsPerHandle(). These are never freed, given that EFI images may hold on to such
+    /// references indefinitely.
+    guids: RefCell<BTreeMap<Guid, Box<Guid>>>,
 
     pub(crate) con: Option<&'static dyn SimpleConsole>,
     pub(crate) memmap: MemoryMap,
@@ -387,6 +391,7 @@ pub fn init(
         let ctx = EfiContext {
             cfgtable: ConfigTableDb::new(),
             protocol_db: RefCell::new(BTreeMap::new()),
+            guids: RefCell::new(BTreeMap::new()),
             con: con,
             memmap: memmap,
             mapper: Box::new(mapper),
@@ -498,6 +503,15 @@ impl EfiContext {
             .as_ref()
             .map(|r| r.get_entropy(buf, use_raw))
             .unwrap_or(false)
+    }
+
+    /// Returns a pointer to a copy of `guid` that remains valid for the lifetime of the EFI
+    /// runtime, so that it can be returned to EFI images by reference.
+    pub(crate) fn persistent_guid(&self, guid: &Guid) -> *const Guid {
+        let mut guids = self.guids.borrow_mut();
+        // The boxed copy never moves or gets freed, as entries are never removed from the map,
+        // and the EfiContext instance is never dropped.
+        &**guids.entry(*guid).or_insert_with(|| Box::new(*guid))
     }
 
     /// Load the image exposed by `loader` as a EFI PE/COFF image. Returns a `LoadedImageData`
