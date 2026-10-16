@@ -119,7 +119,7 @@ extern "efiapi" fn read_blocks(
     buffer_size: usize,
     buffer: *mut (),
 ) -> Status {
-    log::trace!("Calling read_blocks");
+    crate::logger::trace!("Calling read_blocks");
     if this.is_null() || buffer.is_null() {
         return Status::EFI_INVALID_PARAMETER;
     }

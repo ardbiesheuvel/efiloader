@@ -182,7 +182,7 @@ impl SimpleTextInput {
                         KeyStroke(0xa, 0)
                     }
                     c => {
-                        log::trace!("{c:x?}?");
+                        crate::logger::trace!("{c:x?}?");
                         return None;
                     }
                 },
@@ -204,7 +204,7 @@ impl SimpleTextInput {
                 Some(b'0') => KeyStroke(0x14, 0),
                 None => KeyStroke(0x17, 0),
                 c => {
-                    log::trace!("{c:x?}?");
+                    crate::logger::trace!("{c:x?}?");
                     return None;
                 }
             },
@@ -263,7 +263,7 @@ extern "efiapi" fn test_string(this: *mut EfiSimpleTextOutput, string: *const Ch
         return Status::EFI_INVALID_PARAMETER;
     }
 
-    log::trace!("TestString called\n");
+    crate::logger::trace!("TestString called\n");
     Status::EFI_SUCCESS
 }
 
@@ -313,7 +313,7 @@ extern "efiapi" fn clear_screen(this: *mut EfiSimpleTextOutput) -> Status {
         return Status::EFI_INVALID_PARAMETER;
     }
 
-    log::trace!("Clear screen");
+    crate::logger::trace!("Clear screen");
     // SAFETY: `this` is not NULL, and points to the first field of the repr(C) SimpleTextOutput
     // instance that this crate exposes, and so it can be cast to a pointer to it. Only a shared
     // reference is created, as other pointers to the instance exist.
@@ -336,7 +336,7 @@ extern "efiapi" fn set_cursor_position(
     if column >= 80 || row >= 25 {
         return Status::EFI_UNSUPPORTED;
     }
-    log::trace!("Set cursor position to {row},{column}");
+    crate::logger::trace!("Set cursor position to {row},{column}");
     // SAFETY: `this` is not NULL, and points to the first field of the repr(C) SimpleTextOutput
     // instance that this crate exposes, and so it can be cast to a pointer to it. Only a shared
     // reference is created, as other pointers to the instance exist.

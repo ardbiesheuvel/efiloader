@@ -2,6 +2,7 @@
 // Copyright 2023 Google LLC
 // Author: Ard Biesheuvel <ardb@google.com>
 
+use crate::logger::{debug, trace};
 use crate::memmap;
 use crate::memorytype::*;
 use crate::EfiContext;
@@ -13,7 +14,6 @@ use alloc::vec::Vec;
 use core::mem::{size_of, MaybeUninit};
 use core::ops::Range;
 use core::str::from_utf8;
-use log::{debug, trace};
 
 #[cfg(target_arch = "aarch64")]
 use crate::cmo;
@@ -398,7 +398,7 @@ impl<'a> PeLoader<'a> {
         }
 
         if let Some(dir) = self.table_directory.get(BASE_RELOC_TABLE_IDX) {
-            log::trace!("Applying PE relocations");
+            crate::logger::trace!("Applying PE relocations");
             // SAFETY: `buf` was zero initialized above, and has only been written to by
             // load_range() since, which copies file contents or zeroes into it. This means all of
             // it is initialized, and so it can be accessed as a [u8] slice.
@@ -413,7 +413,7 @@ impl<'a> PeLoader<'a> {
             loaded_image: buf,
         };
         pe_image.remap(mapper).or_else(|| {
-            log::warn!("Failed to map image with strict permissions!");
+            crate::logger::warn!("Failed to map image with strict permissions!");
 
             #[cfg(feature = "strict_nx")]
             return None;

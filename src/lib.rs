@@ -80,6 +80,9 @@ use once_cell::unsync::OnceCell;
 
 const UEFI_REVISION: u32 = (2 << 16) | 100; // 2.10
 
+#[macro_use]
+pub mod logger;
+
 pub mod blockio;
 pub mod bootservices;
 #[cfg(target_arch = "aarch64")]
@@ -705,7 +708,7 @@ impl EfiContext {
     pub fn allocate_pool(&self, pool_type: EfiMemoryType, size: usize) -> Result<NonNull<u8>, ()> {
         self.memmap
             .allocate_pool::<u8>(pool_type, size)
-            .map_err(|e| log::debug!("Allocate pool failed {e}"))
+            .map_err(|e| crate::logger::debug!("Allocate pool failed {e}"))
     }
 
     /// Free pool memory at `buffer` that was allocated via [`allocate_pool`](Self::allocate_pool).

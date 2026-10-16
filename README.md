@@ -68,8 +68,9 @@ Not implemented:
   to `efiloader::init()`, and must only be used from one thread, as is the case for UEFI boot
   services in general.
 
-The console (`SimpleConsole`), the source of randomness (`Random`) and a
-[`log`](https://crates.io/crates/log) logger for efiloader's diagnostic messages are optional.
+The console (`SimpleConsole`) and the source of randomness (`Random`) are optional, and so is a
+function that receives efiloader's diagnostic messages, which can be registered using
+`efiloader::logger::set_logger()`.
 
 The `strict_nx` feature, which is enabled by default, makes the PE/COFF loader refuse images that it
 cannot map with strict permissions, e.g., because their sections are not page aligned. Without it,
@@ -406,6 +407,13 @@ fn main() {
 
     let console: &'static dyn efiloader::SimpleConsole = &CONSOLE;
     let efi = efiloader::init(Some(console), memmap, Mprotect, Some(GetRandom)).unwrap();
+
+    // Print efiloader's warnings and errors to stderr
+    efiloader::logger::set_logger(|level, args| {
+        if level <= efiloader::logger::Level::Warn {
+            eprintln!("efiloader: {level:?}: {args}");
+        }
+    });
 
     let path = std::env::args().nth(1).expect("usage: run-efi <image>");
     let app = MemFile(std::fs::read(path).unwrap().leak());
