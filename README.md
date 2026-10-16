@@ -418,11 +418,12 @@ fn main() {
 
 `cargo test` runs the test suite, which embeds efiloader in the test process, and exercises the
 boot services via EFI images that are created on the fly. It can be run for aarch64 on an x86_64
-host using QEMU user mode emulation, e.g.,
+host using QEMU user mode emulation. Emulating QEMU's `max` CPU model ensures that pointer
+authentication is implemented, so that it is exercised by the tests as well:
 
 ```sh
 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER="qemu-aarch64 -L /usr/aarch64-linux-gnu" \
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER="qemu-aarch64 -cpu max -L /usr/aarch64-linux-gnu" \
 cargo test --target aarch64-unknown-linux-gnu
 ```
 
