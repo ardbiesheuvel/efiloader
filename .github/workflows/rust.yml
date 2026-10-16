@@ -20,3 +20,26 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+
+  aarch64:
+
+    runs-on: ubuntu-latest
+
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER: qemu-aarch64 -L /usr/aarch64-linux-gnu
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install the cross toolchain and QEMU
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user
+    - name: Install the Rust targets
+      run: rustup target add aarch64-unknown-none aarch64-unknown-linux-gnu
+    - name: Build for bare metal
+      run: cargo build --verbose --lib --target aarch64-unknown-none
+    - name: Build
+      run: cargo build --verbose --target aarch64-unknown-linux-gnu
+    - name: Run tests
+      run: cargo test --verbose --target aarch64-unknown-linux-gnu
