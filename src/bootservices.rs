@@ -8,11 +8,11 @@ use crate::EfiProtocol;
 use crate::FileLoader;
 use crate::{memorytype::*, status::*, tableheader::*};
 use crate::{Bool, Char16, Event, EventNotify, Guid, Handle, PhysicalAddress, Tpl};
-use crate::{ProtocolDb, ProtocolEntry, ProtocolOwner, TPL_APPLICATION, UEFI_REVISION};
+use crate::{ProtocolDb, ProtocolEntry, ProtocolOwner, UEFI_REVISION};
 
 use crate::devicepath::EFI_DEVICE_PATH_PROTOCOL_GUID;
 use crate::initrdloadfile2::EFI_LOAD_FILE2_PROTOCOL_GUID;
-use crate::loadedimage::{current_image, exit_image, find_loaded_image};
+use crate::loadedimage::{exit_image, find_loaded_image};
 use crate::loadedimage::{ImageOrigin, LoadedImageDevicePath};
 use crate::new_handle;
 use crate::simplefilesystem::{EfiFileProtocol, EfiSimpleFileSystemProtocol};
@@ -24,7 +24,6 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::mem::{size_of, MaybeUninit};
-use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ptr, slice};
 use crc::{Crc, CRC_32_ISO_HDLC};
 
@@ -291,14 +290,12 @@ unsafe impl EfiTable for BootServices {
 const _: () =
     assert!(size_of::<BootServices>() == size_of::<TableHeader>() + 44 * size_of::<usize>());
 
-static CURRENT_TPL: AtomicUsize = AtomicUsize::new(TPL_APPLICATION);
-
 extern "efiapi" fn raise_tpl(new_tpl: Tpl) -> Tpl {
-    CURRENT_TPL.swap(new_tpl, Ordering::AcqRel)
+    EFI.current_tpl.replace(new_tpl)
 }
 
 extern "efiapi" fn restore_tpl(old_tpl: Tpl) {
-    CURRENT_TPL.store(old_tpl, Ordering::Release);
+    EFI.current_tpl.set(old_tpl);
 }
 
 extern "efiapi" fn allocate_pages(
@@ -1322,7 +1319,7 @@ extern "efiapi" fn exit(
     }
 
     // Otherwise, only the image that is currently running may exit
-    if image_handle != current_image() {
+    if image_handle != EFI.current_image.get() {
         return Status::EFI_INVALID_PARAMETER;
     }
 
@@ -1379,7 +1376,7 @@ extern "efiapi" fn stall(micro_seconds: usize) -> Status {
     // terminated, as it may be waiting for something that will never happen, e.g., in an infinite
     // loop after a fatal error.
     if EFI.account_stall(micro_seconds) {
-        let image = current_image();
+        let image = EFI.current_image.get();
         crate::logger::warn!("Stall(): stall limit exceeded, terminating image {image:#x}");
         return exit(image, Status::EFI_TIMEOUT, 0, ptr::null());
     }

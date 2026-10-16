@@ -18,7 +18,6 @@ use alloc::vec::Vec;
 use core::cell::Cell;
 use core::marker::PhantomPinned;
 use core::ptr;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const EFI_LOADED_IMAGE_PROTOCOL_GUID: Guid = guid!(
     0x5B1B31A1,
@@ -42,13 +41,6 @@ pub const EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID: Guid = guid!(
 );
 
 const EFI_LOADED_IMAGE_PROTOCOL_REVISION: u32 = 0x1000;
-
-/// The handle of the image that is currently running, or 0 if none is
-static CURRENT_IMAGE: AtomicUsize = AtomicUsize::new(0);
-
-pub(crate) fn current_image() -> Handle {
-    CURRENT_IMAGE.load(Ordering::Relaxed)
-}
 
 type ImageUnload = extern "efiapi" fn(Handle) -> Status;
 
@@ -253,7 +245,7 @@ impl EfiLoadedImage {
         };
 
         self.started.set(true);
-        let previous = CURRENT_IMAGE.swap(self.image_handle, Ordering::Relaxed);
+        let previous = self.ctx.current_image.replace(self.image_handle);
         // SAFETY: `stack` points to a 16 byte aligned pool allocation of EFI_STACK_SIZE bytes, and
         // so offsetting it by EFI_STACK_SIZE produces a suitably aligned pointer to the top of the
         // stack. `entrypoint` points to the entry point of a PE/COFF image that was loaded and
@@ -270,7 +262,7 @@ impl EfiLoadedImage {
                 stack.offset(EFI_STACK_SIZE as isize),
             )
         };
-        CURRENT_IMAGE.store(previous, Ordering::Relaxed);
+        self.ctx.current_image.set(previous);
         self.ctx.memmap.free_pool(stack).ok();
         ret
     }

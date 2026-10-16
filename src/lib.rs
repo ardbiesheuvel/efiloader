@@ -330,6 +330,12 @@ pub struct EfiContext {
     stall_limit: Cell<Option<u64>>,
     /// The total time that images stalled for so far, in microseconds
     stalled: Cell<u64>,
+    /// The handle of the image that is currently running, or 0 if none is
+    pub(crate) current_image: Cell<Handle>,
+    /// The current task priority level. Asynchronous execution, i.e., events, timers and
+    /// notification functions, is not supported, and so the TPL has no effect, other than being
+    /// returned by RaiseTPL().
+    pub(crate) current_tpl: Cell<Tpl>,
 
     bs: RefCell<Box<BootServices>>,
     rt: RefCell<PoolBox<RuntimeServices>>,
@@ -427,6 +433,8 @@ pub fn init(
         image_verifier: RefCell::new(None),
         stall_limit: Cell::new(None),
         stalled: Cell::new(0),
+        current_image: Cell::new(0),
+        current_tpl: Cell::new(TPL_APPLICATION),
 
         bs: RefCell::new(bs),
         rt: RefCell::new(rt),
