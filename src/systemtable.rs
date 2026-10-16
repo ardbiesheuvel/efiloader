@@ -7,7 +7,7 @@ use crate::{
     bootservices::*, configtable, runtimeservices::*, simpletext::*, tableheader::*, Char16, Handle,
 };
 
-use const_utf16::encode_null_terminated;
+use crate::utf16::utf16_lit;
 use core::mem::size_of;
 use core::ptr;
 
@@ -59,7 +59,7 @@ impl SystemTable {
                 crc32: 0,
                 reserved: 0,
             },
-            firmware_vendor: encode_null_terminated!("Google").as_ptr(),
+            firmware_vendor: utf16_lit!("Google").as_ptr(),
             firmware_revision: UEFI_REVISION,
             _pad: 0,
             console_in_handle: conhandle,

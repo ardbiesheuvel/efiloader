@@ -240,7 +240,7 @@ extern "efiapi" fn output_string(this: *mut EfiSimpleTextOutput, string: *const 
     let (this, string) = unsafe {
         (
             &*(this as *const SimpleTextOutput),
-            widestring::U16CStr::from_ptr_str(string).to_string_lossy(),
+            crate::utf16::from_ptr_lossy(string),
         )
     };
 
