@@ -297,6 +297,15 @@ pub struct LoadFile2Protocol {
     ) -> Status,
 }
 
+/// EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL, up to the members that the tests use
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct SimpleTextOutputProtocol {
+    pub reset: *const c_void,
+    pub output_string:
+        unsafe extern "efiapi" fn(*mut SimpleTextOutputProtocol, *const Char16) -> Status,
+}
+
 /// EFI_SIMPLE_FILE_SYSTEM_PROTOCOL
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -649,6 +658,25 @@ impl efiloader::Random for NoRandom {
     }
 }
 
+/// The console of the EFI runtime, which records the output of EFI images so that the tests can
+/// inspect it
+struct Console(Mutex<String>);
+
+impl efiloader::SimpleConsole for Console {
+    fn write_string(&self, s: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_str(s);
+    }
+
+    fn read_byte(&self) -> Option<u8> {
+        None
+    }
+}
+
+static CONSOLE: Console = Console(Mutex::new(String::new()));
+
 /// An in-memory file that the embedder can pass to the EFI runtime
 pub struct MemFile(pub Vec<u8>);
 
@@ -720,7 +748,8 @@ fn init() -> Context {
     // lifetime of the process.
     unsafe { memmap.declare_memory_region(&ram) }.expect("failed to declare system RAM");
 
-    let efi = efiloader::init(None, memmap, Mapper, None::<NoRandom>)
+    let console: &'static dyn efiloader::SimpleConsole = &CONSOLE;
+    let efi = efiloader::init(Some(console), memmap, Mapper, None::<NoRandom>)
         .expect("failed to initialize the EFI runtime");
 
     let image = MemFile(pe_image(bootstrap_entry));
@@ -766,6 +795,11 @@ impl Efi {
     pub fn bs(&self) -> BootServices {
         // SAFETY: The system table holds a valid pointer to the boot services table.
         unsafe { ptr::read(self.system_table().boot_services) }
+    }
+
+    /// Returns the output that EFI images wrote to the console since the last call
+    pub fn take_console_output(&self) -> String {
+        core::mem::take(&mut *CONSOLE.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// The handle of an image that was loaded and started, which can be passed as the image handle
