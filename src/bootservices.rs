@@ -1625,9 +1625,9 @@ extern "efiapi" fn locate_protocol(
 // Implementing the below functions properly in pure Rust needs c_variadic to stabilize for efiapi
 // For the time being, use a helper in asm to convert the varargs to an array of pointers
 #[cfg(target_arch = "aarch64")]
-core::arch::global_asm!(include_str!("multiprotocol_aarch64.s"));
+core::arch::global_asm!(include_str!("multiprotocol_aarch64.S"));
 #[cfg(target_arch = "x86_64")]
-core::arch::global_asm!(include_str!("multiprotocol_x86_64.s"));
+core::arch::global_asm!(include_str!("multiprotocol_x86_64.S"));
 
 unsafe extern "efiapi" {
     fn install_multiple_protocol_interfaces_wrapper(handle: *mut Handle) -> Status;

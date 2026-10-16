@@ -346,6 +346,6 @@ unsafe extern "C" {
 }
 
 #[cfg(target_arch = "aarch64")]
-core::arch::global_asm!(include_str!("start_image_aarch64.s"));
+core::arch::global_asm!(include_str!("start_image_aarch64.S"));
 #[cfg(target_arch = "x86_64")]
-core::arch::global_asm!(include_str!("start_image_x86_64.s"));
+core::arch::global_asm!(include_str!("start_image_x86_64.S"));
