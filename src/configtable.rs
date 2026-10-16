@@ -78,6 +78,16 @@ impl ConfigTableDb {
         self.db.borrow().0.contains_key(guid)
     }
 
+    /// Drop all entries without releasing the pool memory that backs them.
+    pub(crate) fn forget(&self) {
+        let mut db = self.db.borrow_mut();
+        let (map, slice) = &mut *db;
+        while let Some((_, mut t)) = map.pop_first() {
+            t.p = Raw(core::ptr::null());
+        }
+        *slice = &mut [];
+    }
+
     pub(crate) fn install<T>(&self, guid: &Guid, p: T, efi: &EfiContext)
     where
         T: Into<ConfigurationTablePointer>,

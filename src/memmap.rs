@@ -724,6 +724,10 @@ impl<T> PoolBox<T> {
     pub(crate) fn take(mut self) -> NonNull<T> {
         self.0.take().unwrap()
     }
+
+    pub(crate) const fn empty() -> Self {
+        PoolBox(None)
+    }
 }
 
 impl<T: ?Sized> Drop for PoolBox<T> {
@@ -738,17 +742,18 @@ impl<T: ?Sized> Deref for PoolBox<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        // SAFETY: PoolBox instances are only created by box_new(), and own the initialized pool
-        // allocation they point to until they are dropped or taken.
+        // SAFETY: PoolBox instances are either empty, in which case unwrap() panics, or created by
+        // box_new(), and own the initialized pool allocation they point to until they are dropped
+        // or taken.
         unsafe { self.0.unwrap().as_ref() }
     }
 }
 
 impl<T: ?Sized> DerefMut for PoolBox<T> {
     fn deref_mut(&mut self) -> &mut T {
-        // SAFETY: PoolBox instances are only created by box_new(), and own the initialized pool
-        // allocation they point to until they are dropped or taken. Exclusive access is ensured by
-        // `&mut self`.
+        // SAFETY: PoolBox instances are either empty, in which case unwrap() panics, or created by
+        // box_new(), and own the initialized pool allocation they point to until they are dropped
+        // or taken. Exclusive access is ensured by `&mut self`.
         unsafe { self.0.unwrap().as_mut() }
     }
 }

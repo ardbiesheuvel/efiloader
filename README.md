@@ -64,9 +64,10 @@ Not implemented:
   code and data must be declared as runtime regions, so that the OS keeps it mapped.
 - **Memory permissions**: a `MemoryMapper` implementation must apply the memory permissions that
   the PE/COFF loader and the memory attribute protocol ask for.
-- **Single threaded**: there is a single EFI runtime per program. It is created by the first call
-  to `efiloader::init()`, and must only be used from one thread, as is the case for UEFI boot
-  services in general.
+- **Single threaded**: there is a single EFI runtime per program at any given time. It is created
+  by the first call to `efiloader::init()`, and must only be used from one thread, as is the case
+  for UEFI boot services in general. `efiloader::deinit()` tears it down again, e.g., after a failed
+  attempt to boot an image, so that the next call to `efiloader::init()` creates a new one.
 
 The console (`SimpleConsole`) and the source of randomness (`Random`) are optional, and so is a
 function that receives efiloader's diagnostic messages, which can be registered using

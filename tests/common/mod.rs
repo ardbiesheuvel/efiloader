@@ -621,7 +621,7 @@ pub fn setup() -> Efi {
 }
 
 /// Implements the memory permission management needed by the PE/COFF loader using mprotect()
-struct Mapper;
+pub struct Mapper;
 
 impl efiloader::MemoryMapper for Mapper {
     fn remap_range(&self, range: &Range<usize>, set: u64, clr: u64) -> Result<(), &str> {
@@ -650,7 +650,7 @@ impl efiloader::MemoryMapper for Mapper {
 
 /// Used as a type parameter only: no source of randomness is provided to the EFI runtime, so that
 /// images are loaded at deterministic addresses.
-struct NoRandom;
+pub struct NoRandom;
 
 impl efiloader::Random for NoRandom {
     fn get_entropy(&self, _bytes: &mut [u8], _use_raw: bool) -> bool {
@@ -724,7 +724,9 @@ extern "efiapi" fn bootstrap_entry(image_handle: Handle, system_table: *mut Syst
     Status::EFI_SUCCESS
 }
 
-fn init() -> Context {
+/// Creates an anonymous mapping of [`RAM_SIZE`] bytes, which can be declared to an EFI runtime as
+/// system RAM
+pub fn map_ram() -> Range<usize> {
     // SAFETY: This creates a new anonymous private mapping, which is not shared with anyone.
     let base = unsafe {
         libc::mmap(
@@ -741,7 +743,11 @@ fn init() -> Context {
         libc::MAP_FAILED,
         "failed to allocate memory for the EFI runtime"
     );
-    let ram = base as usize..base as usize + RAM_SIZE;
+    base as usize..base as usize + RAM_SIZE
+}
+
+fn init() -> Context {
+    let ram = map_ram();
 
     let memmap = efiloader::memmap::MemoryMap::new();
     // SAFETY: The mapping is used exclusively as system RAM by the EFI runtime for the remaining

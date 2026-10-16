@@ -76,8 +76,6 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 
-use once_cell::unsync::OnceCell;
-
 const UEFI_REVISION: u32 = (2 << 16) | 100; // 2.10
 
 #[macro_use]
@@ -338,22 +336,24 @@ pub struct EfiContext {
     pub(crate) st: RefCell<PoolBox<SystemTable>>,
 }
 
-static EFI: EfiContextHolder = EfiContextHolder(OnceCell::new());
-struct EfiContextHolder(OnceCell<EfiContext>);
+static EFI: EfiContextHolder = EfiContextHolder(UnsafeCell::new(None));
+struct EfiContextHolder(UnsafeCell<Option<EfiContext>>);
 
 // SAFETY: EFI boot services are single threaded, and the held context is only accessible via
 // shared references. Interior mutability of the member data is implemented using RefCell wrappers,
 // which track borrows at runtime, and will panic if the same thread ends up borrowing the same
-// data multiple times in an unsupported manner.
+// data multiple times in an unsupported manner. The context is only ever created by [`init`] when
+// no context exists, and destroyed by [`deinit`], whose caller must guarantee that no references
+// to the context exist at that point.
 unsafe impl Sync for EfiContextHolder {}
 
 impl Deref for EfiContextHolder {
     type Target = EfiContext;
 
     fn deref(&self) -> &Self::Target {
-        &self
-            .0
-            .get()
+        // SAFETY: see above
+        unsafe { &*self.0.get() }
+            .as_ref()
             .expect("efiloader::init() has not been called yet")
     }
 }
@@ -368,7 +368,8 @@ pub(crate) fn efi_system_table() -> *const SystemTable {
 /// Due to the fact that EFI boot and runtime services do not take a `this` pointer, it is not
 /// possible to disambiguate between different instances of this type, and so every call to
 /// [`init`] will return a reference to the same instance, but only the arguments passed via the
-/// first call will be taken into account.
+/// first call will be taken into account. The instance may be torn down using [`deinit`], after
+/// which the next call to [`init`] creates a new one.
 ///
 /// A [`SimpleConsole`] implementation may be passed via`con`, which will be used as the EFI
 /// SimpleText in/output protocol exposed via the EFI System Table.
@@ -387,71 +388,101 @@ pub fn init(
     mapper: impl MemoryMapper + 'static,
     rng: Option<impl Random + 'static>,
 ) -> Result<&'static EfiContext, ()> {
-    EFI.0.get_or_try_init(move || {
-        let conhandle = new_handle();
-        let inp = SimpleTextInput::new(EfiContext::read_byte);
-        let out = SimpleTextOutput::new(EfiContext::write_string);
+    // SAFETY: EFI boot services are single threaded, and the holder is only modified when no
+    // context exists, here and in deinit(), whose caller guarantees that no references to the
+    // context exist at that point.
+    if let Some(ctx) = unsafe { &*EFI.0.get() }.as_ref() {
+        return Ok(ctx);
+    }
 
-        let bs = Box::new(BootServices::new());
+    let conhandle = new_handle();
+    let inp = SimpleTextInput::new(EfiContext::read_byte);
+    let out = SimpleTextOutput::new(EfiContext::write_string);
 
-        let rt = memmap
-            .box_new(EfiRuntimeServicesData, RuntimeServices::new())
-            .or(Err(()))?;
+    let bs = Box::new(BootServices::new());
 
-        // The console protocol methods cast the protocol pointers back to the SimpleTextInput and
-        // SimpleTextOutput instances that contain them, so derive the pointers from those.
-        let conin = inp.as_proto_ptr() as *const EfiSimpleTextInput;
-        let conout = out.as_proto_ptr() as *const EfiSimpleTextOutput;
-        let st = memmap
-            .box_new(
-                EfiRuntimeServicesData,
-                SystemTable::new(&*bs, &*rt, conin, conout, conhandle),
-            )
-            .or(Err(()))?;
+    let rt = memmap
+        .box_new(EfiRuntimeServicesData, RuntimeServices::new())
+        .or(Err(()))?;
 
-        let ctx = EfiContext {
-            cfgtable: ConfigTableDb::new(),
-            protocol_db: RefCell::new(BTreeMap::new()),
-            guids: RefCell::new(BTreeMap::new()),
-            con: con,
-            memmap: memmap,
-            mapper: Box::new(mapper),
-            rng: rng.map(|r| Box::new(r) as _),
-            image_verifier: RefCell::new(None),
-            stall_limit: Cell::new(None),
-            stalled: Cell::new(0),
+    // The console protocol methods cast the protocol pointers back to the SimpleTextInput and
+    // SimpleTextOutput instances that contain them, so derive the pointers from those.
+    let conin = inp.as_proto_ptr() as *const EfiSimpleTextInput;
+    let conout = out.as_proto_ptr() as *const EfiSimpleTextOutput;
+    let st = memmap
+        .box_new(
+            EfiRuntimeServicesData,
+            SystemTable::new(&*bs, &*rt, conin, conout, conhandle),
+        )
+        .or(Err(()))?;
 
-            bs: RefCell::new(bs),
-            rt: RefCell::new(rt),
-            st: RefCell::new(st),
-        };
+    let ctx = EfiContext {
+        cfgtable: ConfigTableDb::new(),
+        protocol_db: RefCell::new(BTreeMap::new()),
+        guids: RefCell::new(BTreeMap::new()),
+        con: con,
+        memmap: memmap,
+        mapper: Box::new(mapper),
+        rng: rng.map(|r| Box::new(r) as _),
+        image_verifier: RefCell::new(None),
+        stall_limit: Cell::new(None),
+        stalled: Cell::new(0),
 
-        ctx.install_pinned_protocol(conhandle, inp, ProtocolOwner::Runtime)?;
-        ctx.install_pinned_protocol(conhandle, out, ProtocolOwner::Runtime)?;
-        let memattr = Box::pin(EfiMemoryAttribute::new());
-        ctx.install_pinned_protocol(new_handle(), memattr, ProtocolOwner::Runtime)?;
-        let rng = Box::pin(EfiRng::new());
-        ctx.install_pinned_protocol(new_handle(), rng, ProtocolOwner::Runtime)?;
+        bs: RefCell::new(bs),
+        rt: RefCell::new(rt),
+        st: RefCell::new(st),
+    };
 
-        let rtprop = ctx
-            .memmap
-            .box_new(
-                EfiACPIReclaimMemory,
-                RtPropertiesTable {
-                    version: 1,
-                    length: core::mem::size_of::<RtPropertiesTable>() as _,
-                    supported_mask: EFI_RT_SUPPORTED_GET_TIME
-                        | EFI_RT_SUPPORTED_SET_TIME
-                        | EFI_RT_SUPPORTED_GET_VARIABLE
-                        | EFI_RT_SUPPORTED_GET_NEXT_VARIABLE_NAME
-                        | EFI_RT_SUPPORTED_RESET_SYSTEM,
-                },
-            )
-            .or(Err(()))?;
+    ctx.install_pinned_protocol(conhandle, inp, ProtocolOwner::Runtime)?;
+    ctx.install_pinned_protocol(conhandle, out, ProtocolOwner::Runtime)?;
+    let memattr = Box::pin(EfiMemoryAttribute::new());
+    ctx.install_pinned_protocol(new_handle(), memattr, ProtocolOwner::Runtime)?;
+    let rng = Box::pin(EfiRng::new());
+    ctx.install_pinned_protocol(new_handle(), rng, ProtocolOwner::Runtime)?;
 
-        ctx.install_configtable(&EFI_RT_PROPERTIES_TABLE_GUID, rtprop);
-        Ok(ctx)
-    })
+    let rtprop = ctx
+        .memmap
+        .box_new(
+            EfiACPIReclaimMemory,
+            RtPropertiesTable {
+                version: 1,
+                length: core::mem::size_of::<RtPropertiesTable>() as _,
+                supported_mask: EFI_RT_SUPPORTED_GET_TIME
+                    | EFI_RT_SUPPORTED_SET_TIME
+                    | EFI_RT_SUPPORTED_GET_VARIABLE
+                    | EFI_RT_SUPPORTED_GET_NEXT_VARIABLE_NAME
+                    | EFI_RT_SUPPORTED_RESET_SYSTEM,
+            },
+        )
+        .or(Err(()))?;
+
+    ctx.install_configtable(&EFI_RT_PROPERTIES_TABLE_GUID, rtprop);
+    // SAFETY: no context exists, and so no references to it exist either
+    Ok(unsafe { &mut *EFI.0.get() }.insert(ctx))
+}
+
+/// Tears down the EFI runtime created by [`init`], releasing all memory it allocated from the
+/// Rust heap, so that a new one can be created by calling [`init`] again. Memory described by the
+/// EFI memory map is not touched: it is owned by the caller, who may release it or declare it
+/// again in the memory map of the next EFI runtime.
+///
+/// # Safety
+///
+/// No references to the [`EfiContext`] returned by [`init`] (or to any object it owns) may be
+/// live, and no EFI image may call into the EFI runtime again.
+pub unsafe fn deinit() {
+    // SAFETY: the caller guarantees that no references to the context exist, and EFI boot services
+    // are single threaded
+    let holder = unsafe { &mut *EFI.0.get() };
+    if let Some(ctx) = holder.as_ref() {
+        // Pool and page allocations are carved out of memory that the caller owns, and will be
+        // released by the caller in one go. So prevent the drop handlers of PoolBox and of the
+        // config table database from calling back into the EFI context that is being torn down.
+        ctx.cfgtable.forget();
+        core::mem::forget(ctx.rt.replace(PoolBox::empty()));
+        core::mem::forget(ctx.st.replace(PoolBox::empty()));
+    }
+    drop(holder.take());
 }
 
 impl EfiContext {
