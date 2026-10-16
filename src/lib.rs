@@ -217,7 +217,7 @@ pub trait FileLoader {
 /// impl efiloader::Random for Random {
 ///     fn get_entropy(&self, bytes: &mut [u8], _use_raw: bool) -> bool {
 ///         let mut rng = rand::thread_rng();
-///         bytes.fill_with(|| rng.gen::<u8>());
+///         rng.fill(bytes);
 ///         true
 ///     }
 /// }
