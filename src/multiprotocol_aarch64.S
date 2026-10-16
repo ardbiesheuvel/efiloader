@@ -6,6 +6,7 @@
 	.macro	wrap, ident:req
 	.globl	\ident\()_wrapper
 \ident\()_wrapper:
+	paciasp			// also serves as the BTI landing pad
 	stp	x29, x30, [sp, #-80]!
 	mov	x29, sp
 	stp	x1, x2, [sp, #24]
@@ -15,6 +16,7 @@
 	add	x1, sp, #24
 	bl	\ident
 	ldp	x29, x30, [sp], #80
+	autiasp
 	ret
 	.endmacro
 

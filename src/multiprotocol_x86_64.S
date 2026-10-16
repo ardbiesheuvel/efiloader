@@ -6,6 +6,8 @@
 	.macro	wrap, ident:req
 	.globl	\ident\()_wrapper
 \ident\()_wrapper:
+	endbr64
+
 	// Store the varargs in the shadow space on the stack
 	mov	[rsp + 0x10], rdx
 	mov	[rsp + 0x18], r8

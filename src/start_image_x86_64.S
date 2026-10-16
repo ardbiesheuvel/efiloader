@@ -5,12 +5,14 @@
 	.section ".text", "ax", %progbits
 	.globl	exit_image
 exit_image:
+	endbr64
 	mov	rax, rdi
 	mov	rsp, rsi
 	jmp	0f
 
 	.globl	start_image
 start_image:
+	endbr64
 	push	r15
 	push	r14
 	push	r13

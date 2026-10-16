@@ -5,11 +5,13 @@
 	.section ".text", "ax", %progbits
 	.globl	exit_image
 exit_image:
+	bti	c
 	mov	sp, x1
 	b	0f
 
 	.globl	start_image
 start_image:
+	paciasp			// also serves as the BTI landing pad
 	stp	x29, x30, [sp, #-96]!
 	mov	x29, sp
 	stp	x19, x20, [sp, #16]
@@ -31,4 +33,5 @@ start_image:
 	ldp	x25, x26, [sp, #64]
 	ldp	x27, x28, [sp, #80]
 	ldp	x29, x30, [sp], #96
+	autiasp
 	ret
